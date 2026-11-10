@@ -1,0 +1,172 @@
+
+/* 색상 선택기 바깥쪽 흐림 배경 */
+.color-picker-backdrop {
+  position: fixed;
+  inset: 0;
+
+  width: 100%;
+  height: 100%;
+
+  /* 화면을 살짝 어둡게 */
+  background: rgba(0, 0, 0, 0.25);
+
+  /* 뒤쪽 화면 흐림 효과 */
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+
+  /* 색상 선택기보다 아래 */
+  z-index: 99;
+}
+
+.color-picker {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: 302px;
+  height: 304px;
+  background: #fff;
+  color: #111;
+  border-radius: 8px;
+  border: 1px solid #ccc;
+  box-shadow: 0 8px 30px #0005;
+  z-index: 100;
+  box-sizing: border-box;
+}
+
+.color-picker-header {
+  height: 32px;
+  padding: 0 10px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 13px;
+}
+
+.color-picker-header button {
+  border: none;
+  background: transparent;
+  font-size: 22px;
+  cursor: pointer;
+  color: #111;
+}
+
+.color-picker-body {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  height: 216px;
+}
+
+.hue-wheel {
+  width: 214px;
+  height: 214px;
+  border-radius: 50%;
+  position: relative;
+  background: conic-gradient(
+    red 0deg,
+    yellow 60deg,
+    lime 120deg,
+    cyan 180deg,
+    blue 240deg,
+    magenta 300deg,
+    red 360deg
+  );
+  touch-action: none;
+  user-select: none;
+  cursor: crosshair;
+}
+
+.hue-wheel::before {
+  content: '';
+  position: absolute;
+  inset: 25px;
+  background: white;
+  border-radius: 50%;
+}
+
+.hue-indicator {
+  position: absolute;
+  width: 24px;
+  height: 24px;
+  border: 4px solid #ddd;
+  border-radius: 50%;
+  transform: translate(-50%, -50%);
+  box-sizing: border-box;
+  z-index: 3;
+  pointer-events: none;
+}
+
+.sv-square {
+  position: absolute;
+  width: 110px;
+  height: 110px;
+  left: 52px;
+  top: 52px;
+  border-radius: 5px;
+  overflow: hidden;
+  cursor: crosshair;
+  touch-action: none;
+  user-select: none;
+
+  /* 드래그 중 색상 변경 지연 제거 */
+  transition: none;
+}
+
+.sv-white,
+.sv-black {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.sv-white {
+  background: linear-gradient(to right, white, transparent);
+}
+
+.sv-black {
+  background: linear-gradient(to top, black, transparent);
+}
+
+.sv-indicator {
+  position: absolute;
+  width: 12px;
+  height: 12px;
+  border: 2px solid white;
+  box-shadow: 0 0 2px black;
+  border-radius: 50%;
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+}
+
+.recent-colors {
+  display: flex;
+  justify-content: space-between;
+  gap: 7px;
+  padding: 8px 14px;
+}
+
+.recent-color {
+  width: 33px;
+  height: 33px;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  flex-shrink: 0;
+
+  /* 현재 색상을 즉시 표시 */
+  transition: none;
+}
+
+/* 현재 선택 중인 색상 */
+.recent-color.current-color {
+  border: 2px solid #333;
+  box-shadow: 0 0 0 2px #fff inset;
+}
+
+/* 색상환과 채도/명도 선택 표시 원의 움직임 지연 제거 */
+.hue-indicator,
+.sv-indicator {
+  pointer-events: none;
+  transition: none;
+}
