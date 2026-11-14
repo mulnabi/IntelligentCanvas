@@ -1,0 +1,244 @@
+/* 오른쪽 위 레이어 버튼 */
+.layer-toggle {
+  position: fixed;
+  top: 12px;
+  right: 12px;
+  z-index: 10;
+  width: 50px;
+  height: 50px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 4px #4446;
+  cursor: pointer;
+}
+
+.layer-toggle svg {
+  display: block;
+  margin: 10px;
+  width: 30px;
+  height: 30px;
+  fill: none;
+  stroke: #f90;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+/* 오른쪽에서 나오는 패널 */
+.layer-drawer {
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 20;
+  width: min(320px, 72vw);
+  background: #fff;
+  border-left: 1px solid #222;
+  animation: layer-in 0.2s;
+}
+
+@keyframes layer-in {
+  from { transform: translateX(100%); }
+}
+
+.layer-panel {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  color: #222;
+  font-family: sans-serif;
+  font-size: 15px;
+}
+
+/* 패널 안 버튼 기본 모양 제거 */
+.layer-panel button {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+.layer-panel button:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+.layer-panel svg {
+  display: block;
+  width: 22px;
+  height: 22px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+/* 제목 줄 */
+.layer-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 12px 10px 16px;
+  border-bottom: 1px solid #ddd;
+}
+
+.layer-head h2 {
+  margin: 0;
+  font-size: 18px;
+}
+
+.layer-count {
+  margin-right: auto;
+  padding: 1px 8px;
+  border-radius: 20px;
+  background: #eee;
+  color: #666;
+  font-size: 13px;
+}
+
+.layer-add,
+.layer-close {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  border-radius: 10px;
+}
+
+.layer-panel .layer-add {
+  border: 1.5px solid #222;
+}
+
+/* 목록 */
+.layer-rows {
+  flex: 1;
+  margin: 0;
+  padding: 6px 8px;
+  list-style: none;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.layer-row {
+  flex: none;
+  display: flex;
+  height: 52px;
+  border-radius: 12px;
+  background: #fff;
+  user-select: none;
+}
+
+/* 끄는 동안에만 다른 줄들이 부드럽게 비켜나는 코드 */
+.layer-rows.is-sorting .layer-row {
+  transition: transform 0.15s;
+}
+
+.layer-row.is-selected {
+  background: #fff1dc;
+  box-shadow: inset 0 0 0 2px #f90;
+}
+
+.layer-row.is-hidden .layer-select,
+.layer-row.is-hidden .layer-eye {
+  opacity: 0.4;
+}
+
+.layer-rows.is-sorting .layer-row.is-dragging {
+  position: relative;
+  z-index: 5;
+  box-shadow: 0 4px 14px #0004, inset 0 0 0 2px #f90;
+  transition: none;
+}
+
+.layer-grip {
+  display: flex;
+  align-items: center;
+  width: 28px;
+  padding-left: 4px;
+  color: #999;
+  cursor: grab;
+  touch-action: none;
+}
+
+.layer-select {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  text-align: left;
+}
+
+.layer-thumb {
+  flex: none;
+  width: 40px;
+  height: 40px;
+  border: 1.5px solid #222;
+  border-radius: 10px;
+  background: #fff repeating-conic-gradient(#e8e8e8 0% 25%, transparent 0% 50%) 0 0 / 12px 12px;
+}
+
+.layer-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.layer-tag {
+  flex: none;
+  padding: 1px 6px;
+  border: 1px solid #ddd;
+  border-radius: 20px;
+  background: #fff;
+  color: #666;
+  font-size: 11px;
+}
+
+.layer-eye {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 42px;
+}
+
+/* 아래쪽 (불투명도, 삭제) */
+.layer-bottom {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 12px;
+  border-top: 1px solid #ddd;
+}
+
+.layer-opacity {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 13px;
+}
+
+.layer-opacity input {
+  flex: 1;
+  min-width: 0;
+  accent-color: #f90;
+}
+
+.layer-opacity span {
+  width: 40px;
+  text-align: right;
+  color: #666;
+}
+
+.layer-panel .layer-delete {
+  height: 40px;
+  border: 1.5px solid #d33;
+  border-radius: 20px;
+}
