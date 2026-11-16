@@ -7,6 +7,8 @@ import ToolPicker from './components/DrawingSpace/ToolPicker'
 
 import ArtworkList from './page/ArtworkList'
 import DrawingSpace from './page/DrawingSpace'
+import SignupPage from './page/SignupPage'
+import LoginPage from './page/LoginPage'
 
 export default function App() {
   const [count, setCount] = useState(0)
@@ -15,6 +17,8 @@ export default function App() {
     <BrowserRouter>
       <Routes>
         <Route path="/" element={<ArtworkList/>} />
+        <Route path='/singup' element={<SignupPage/>}/>
+        <Route path='/login' element={<LoginPage/>}/>
         <Route path="/drawing" element={<DrawingSpace/>} />
       </Routes>
     </BrowserRouter>
