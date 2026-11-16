@@ -37,3 +37,8 @@ export const artworks = [
     updatedAt: '2026-08-19',
   },
 ]
+export const dummyLayers = [
+  { layerId: 'layer-3', name: '얼굴 선', sortOrder: 1, opacity: 1, visible: true, isTemporary: false, category: '선화' },
+  { layerId: 'layer-2', name: '머리카락', sortOrder: 2, opacity: 0.8, visible: true, isTemporary: false, category: '채색' },
+  { layerId: 'layer-1', name: '하늘', sortOrder: 3, opacity: 1, visible: true, isTemporary: false, category: '배경' },
+]

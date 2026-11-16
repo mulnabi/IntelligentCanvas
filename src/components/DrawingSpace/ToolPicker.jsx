@@ -1,7 +1,6 @@
-import { useState } from 'react'
+import { useState, useRef } from 'react'
 import './ToolPicker.css'
 
-import Range from '../Range'
 import Color from './Color'
 
 const ToolRadio=({ value, tool, f, children })=>(
@@ -20,9 +19,10 @@ const ToolRadio=({ value, tool, f, children })=>(
 
 function ToolPicker({f}) {
   const [tool, setTool] = useState('pen');
+  const [color, setColor] = useState('#000');
   const onPick=e=>{
     setTool(e.value)
-    f(e.value)
+    f({ tool: e.value, color: color })
   }
   return(
     <div className="tool-picker-layout">
@@ -36,9 +36,14 @@ function ToolPicker({f}) {
         <ToolRadio value="pen" tool={tool} f={onPick}>
           <svg viewBox="0 0 32 32"><path d="m23 6 3 3 2-2-3-3-2 2m-2 12 5-5-5-5L5 24l-1 4 4-1 16-16"/></svg>
         </ToolRadio>
-        <Color/>
+        <Color 
+          color={color}
+          onChange={e=>{
+            setColor(e)
+            f({ tool: tool, color: e })
+          }}
+        />
       </div>
-      <Range vertical={true}/>
     </div>
   )
 }
