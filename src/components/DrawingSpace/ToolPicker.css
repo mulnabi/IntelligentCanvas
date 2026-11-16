@@ -5,6 +5,7 @@
   left:8px;
   height:100%;
   z-index:10;
+  pointer-events:none;
 }
 
 .tool-picker{
@@ -19,6 +20,7 @@
   z-index:10;
   width: 40px;
   padding:5px;
+  pointer-events:auto;
 }
 
 .tool-picker::before{
