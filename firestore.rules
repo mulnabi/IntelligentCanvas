@@ -2,6 +2,30 @@ rules_version = '2';
 
 service cloud.firestore {
   match /databases/{database}/documents {
+    // 1단계 Emulator 연결 검증 전용. 운영 배포용 권한 정책이 아니다.
+    match /users/{uid}/connectionTests/{testId} {
+      function isOwner() {
+        return request.auth != null && request.auth.uid == uid;
+      }
+
+      function isValidTestDocument() {
+        let data = request.resource.data;
+        return data.keys().hasAll(['ownerUid', 'runId', 'environment', 'message', 'createdAt'])
+          && data.keys().hasOnly(['ownerUid', 'runId', 'environment', 'message', 'createdAt'])
+          && data.ownerUid == uid
+          && data.runId == testId
+          && data.environment == 'emulator'
+          && data.message is string
+          && data.message.size() <= 100
+          && data.createdAt == request.time;
+      }
+
+      allow get, delete: if isOwner();
+      allow create: if isOwner() && isValidTestDocument();
+      allow list, update: if false;
+    }
+
+    // 작품, 편집 세션, 수정 이력 및 그 밖의 경로는 계속 차단한다.
     match /{document=**} {
       allow read, write: if false;
     }
