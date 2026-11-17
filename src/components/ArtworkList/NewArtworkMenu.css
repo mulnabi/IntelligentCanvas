@@ -1,0 +1,83 @@
+.new-button {
+  background: var(--button-bg);
+  color: white;
+  border: none;
+  padding: 10px 16px;
+  border-radius: 8px;
+  font-size: 14px;
+  cursor: pointer;
+}
+
+.new-artwork-menu{
+  position:absolute;
+  background:#fff;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  width: calc(100% - 32px);
+  max-width: 420px;
+  max-height: 90%;
+  padding: 12px;
+  border-radius: 12px;
+  left:50%;
+  top:50%;
+  transform:translate(-50%,-50%);
+  box-shadow: 0 1px 4px #4446;
+  box-sizing: border-box;
+}
+.new-artwork-menu h3{
+  margin:0 0 8px 0;
+}
+.new-artwork-menu main{
+  display:flex;
+  flex-direction:column;
+  gap:10px;
+  scrollbar-width: thin;
+  overflow:auto;
+}
+.mini-title{
+  font-size: 12px;
+  color: #444;
+}
+.new-artwork-menu .items{
+  display:flex;
+  flex-direction:column;
+  gap:6px;
+}
+.new-artwork-menu .contents{
+  display: grid;
+  grid-auto-flow: column;
+  gap: 8px;
+  align-items: center;
+}
+.new-artwork-menu .items>.contents{
+  height:30px;
+}
+.new-artwork-menu input{
+  background: var(--input-bg);
+  border: none;
+  height:100%;
+  border-radius: 50vh;
+  padding: 0 12px;
+  font-size: 14px;
+}
+.size-input{
+  grid-template-columns: minmax(0, 1fr) 20px minmax(0, 1fr);
+}
+
+.new-artwork-menu .cancel{
+  background:#fff;
+  border: 1px solid var(--line);
+  padding: 10px 8px;
+  border-radius: 8px;
+  font-size: 14px;
+}
+.new-artwork-menu .confirm{
+  background: var(--button-bg);
+  color: white;
+  border: none;
+  padding: 10px 8px;
+  border-radius: 8px;
+  font-size: 14px;
+  cursor: pointer;
+}

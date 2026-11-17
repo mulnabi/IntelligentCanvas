@@ -1,19 +1,26 @@
 import { useState } from 'react'
-import heroImg from './assets/hero.png'
-import reactLogo from './assets/react.svg'
-import viteLogo from './assets/vite.svg'
+import { BrowserRouter, Routes, Route } from "react-router";
+
 import './App.css'
 
-import ToolPicker from './components/ToolPicker'
-import ArtworkList from './components/ArtworkList'
+import ToolPicker from './components/DrawingSpace/ToolPicker'
+
+import ArtworkList from './page/ArtworkList'
+import DrawingSpace from './page/DrawingSpace'
+import SignupPage from './page/SignupPage'
+import LoginPage from './page/LoginPage'
 
 export default function App() {
   const [count, setCount] = useState(0)
 
   return (
-    <>
-      {/* <ArtworkList></ArtworkList> */}
-      <ToolPicker/>
-    </>
+    <BrowserRouter>
+      <Routes>
+        <Route path="/" element={<ArtworkList/>} />
+        <Route path='/singup' element={<SignupPage/>}/>
+        <Route path='/login' element={<LoginPage/>}/>
+        <Route path="/drawing" element={<DrawingSpace/>} />
+      </Routes>
+    </BrowserRouter>
   )
 }

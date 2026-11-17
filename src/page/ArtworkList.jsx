@@ -1,21 +1,23 @@
 import { useState } from 'react'
-import ArtworkCard from './ArtworkCard'
+import { useNavigate } from "react-router";
+
+import ArtworkCard from '../components/ArtworkList/ArtworkCard'
+import NewArtworkMenu from '../components/ArtworkList/NewArtworkMenu'
 import { artworks } from '../data/dummyData'
 import './ArtworkList.css'
 
 function ArtworkList() {
+  const navigate = useNavigate()
   const [search, setSearch] = useState('')
 
   // 검색어 들어간 것만 보여주기
   const filtered = artworks.filter((item) => item.title.includes(search))
 
   const handleNew = () => {
-    // 새 작품 만들기 (캔버스 크기, 8등신/SD 템플릿 선택 창 띄우기)
-    alert('준비단계')
+    navigate('/drawing')
   }
 
   const handleOpen = (item) => {
-    // 캔버스 화면으로 이동 (라우터 정해지면)
     console.log('열기', item)
   }
 
@@ -23,9 +25,7 @@ function ArtworkList() {
     <div className="artwork-page">
       <div className="page-top">
         <h2>내 작품</h2>
-        <button className="new-button" onClick={handleNew}>
-          + 새 작품
-        </button>
+        <NewArtworkMenu f={handleNew}/>
       </div>
 
       <div className="search-row">
@@ -35,7 +35,6 @@ function ArtworkList() {
           value={search}
           onChange={(e) => setSearch(e.target.value)}
         />
-        {/*정렬 기능 아직 연결 안 함 */}
         <select>
           <option>최근 수정순</option>
           <option>이름순</option>

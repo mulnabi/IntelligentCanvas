@@ -1,44 +1,52 @@
-.tool-picker{
+.tool-picker-layout{
   position:fixed;
+  display:flex;
+  align-items: center;
+  left:8px;
+  height:100%;
+  z-index:10;
+  pointer-events:none;
+}
+
+.tool-picker{
+  position:relative;
   display:flex;
   flex-direction:column;
   gap:5px; 
   background:#fff;
   border-radius:50vw;
   overflow:hidden;
-  box-shadow:1px 2px 5px#0006;
-  left:8px;
-  top:50%;
-  transform:translateY(-50%);
+  box-shadow: 0 1px 4px #4446;
   z-index:10;
   width: 40px;
   padding:5px;
+  pointer-events:auto;
 }
 
 .tool-picker::before{
   content:"";
   position:absolute;
   left:5px;
-  bottom:5px;
+  top:5px;
   width:40px;
   height:40px;
   border-radius:50%;
-  background:#fa0;
+  background:var(--button-bg);
   transition:transform .2s;
   pointer-events:none;
   z-index:-1;
 }
 
 .tool-picker:has(#pen:checked)::before{
-  transform:translateY(0);
+  transform:translateY(90px);
 }
 
 .tool-picker:has(#eraser:checked)::before{
-  transform:translateY(-45px);
+  transform:translateY(45px);
 }
 
-.tool-picker:has(#fill:checked)::before{
-  transform:translateY(-90px);
+.tool-picker:has(#select:checked)::before{
+  transform:translateY(0px);
 }
 
 .ToolRadioInput{display:none;}

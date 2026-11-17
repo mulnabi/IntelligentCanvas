@@ -14,7 +14,8 @@
     "dexie-react-hooks": "^4.4.0",
     "firebase": "^13.3.0",
     "react": "^19.2.8",
-    "react-dom": "^19.2.8"
+    "react-dom": "^19.2.8",
+    "react-router": "^8.5.1"
   },
   "devDependencies": {
     "@types/react": "^19.2.18",

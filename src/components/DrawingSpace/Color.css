@@ -1,0 +1,127 @@
+
+.openColorPicker{
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  outline: 1px solid var(--line);
+  cursor: pointer;
+}
+
+.color-picker-menu{
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: calc(100% - 32px);
+  max-width: 400px;
+  height: auto;
+  box-sizing: border-box;
+  background: #fff;
+  padding: 12px 20px 18px;
+  border-radius: 12px;
+  box-shadow: 0 1px 4px #4446;
+}
+
+/* ------ 추가-1 : 헤더 ------ */
+.color-picker-header{
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+
+.color-picker-header button{
+  border: 0;
+  background: none;
+  font-size: 28px;
+  line-height: 1;
+  cursor: pointer;
+}
+/* --------------------- */
+
+/* ------ 추가-2 : 색상환 ------ */
+.color-picker-wheel{
+  position: relative;
+  width: min(100%, 282px);
+  aspect-ratio: 1;
+  margin: 0 auto 12px;
+  border-radius: 50%;
+  background: conic-gradient(
+    red,
+    yellow,
+    lime,
+    cyan,
+    blue,
+    magenta,
+    red
+  );
+  cursor: crosshair;
+  touch-action: none;
+}
+
+.color-picker-wheel::before{
+  content: '';
+  position: absolute;
+  inset: 12%;
+  border-radius: 50%;
+  background: white;
+  pointer-events: none;
+}
+
+.color-picker-hue-marker{
+  position: absolute;
+  width: 32px;
+  height: 32px;
+  border: 5px solid #eee;
+  box-sizing: border-box;
+  border-radius: 50%;
+  transform: translate(-50%, -50%);
+  box-shadow: 0 0 0 2px #999;
+  pointer-events: none;
+  z-index: 2;
+}
+/* --------------------- */
+
+/* ------ 추가-3 : 채도 및 명도 ------ */
+.color-picker-square{
+  position: absolute;
+  width: 52%;
+  height: 52%;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  border-radius: 6px;
+  cursor: crosshair;
+  touch-action: none;
+  z-index: 1;
+}
+
+.color-picker-sv-marker{
+  position: absolute;
+  width: 16px;
+  height: 16px;
+  border: 2px solid white;
+  box-sizing: border-box;
+  border-radius: 50%;
+  transform: translate(-50%, -50%);
+  box-shadow: 0 0 0 1px #333;
+  pointer-events: none;
+}
+/* --------------------- */
+
+/* ------ 추가-4 : 최근 색상 ------ */
+.color-picker-recent{
+  display: grid;
+  grid-template-columns: repeat(8, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.color-picker-swatch{
+  width: 100%;
+  aspect-ratio: 1;
+  border: 0;
+  border-radius: 10px;
+  cursor: pointer;
+  padding: 0;
+}
+/* --------------------- */
