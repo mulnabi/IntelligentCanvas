@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { useNavigate } from "react-router";
 import './Auth.css'
 
 const initialValues = {
@@ -8,7 +9,8 @@ const initialValues = {
   confirmPassword: '',
 }
 
-function SignupPage({ onBack, onSignup }) {
+function SignupPage({ onSignup }) {
+  const navigate = useNavigate()
   const [values, setValues] = useState(initialValues)
   const [error, setError] = useState('')
 
@@ -25,6 +27,10 @@ function SignupPage({ onBack, onSignup }) {
     }
 
     onSignup()
+  }
+
+  const onBack=()=>{
+    navigate(-1)
   }
 
   return (

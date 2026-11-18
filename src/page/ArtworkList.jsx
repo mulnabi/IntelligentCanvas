@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useNavigate } from "react-router";
 
 import ArtworkCard from '../components/ArtworkList/ArtworkCard'
@@ -20,6 +20,12 @@ function ArtworkList() {
   const handleOpen = (item) => {
     console.log('열기', item)
   }
+  useEffect(() => {
+    let isLogin;
+    if(isLogin==false){
+      navigate('/login')
+    }
+  }, []);
 
   return (
     <div className="artwork-page">

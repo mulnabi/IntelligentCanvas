@@ -17,7 +17,7 @@ export default function App() {
     <BrowserRouter>
       <Routes>
         <Route path="/" element={<ArtworkList/>} />
-        <Route path='/singup' element={<SignupPage/>}/>
+        <Route path='/signup' element={<SignupPage/>}/>
         <Route path='/login' element={<LoginPage/>}/>
         <Route path="/drawing" element={<DrawingSpace/>} />
       </Routes>

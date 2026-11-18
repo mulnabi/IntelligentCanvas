@@ -1,7 +1,9 @@
 import { useState } from 'react'
+import { useNavigate } from "react-router";
 import './Auth.css'
 
-function LoginPage({ onLogin, onSignup }) {
+function LoginPage({ onLogin }) {
+  const navigate = useNavigate()
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [error, setError] = useState('')
@@ -16,6 +18,10 @@ function LoginPage({ onLogin, onSignup }) {
 
     setError('')
     onLogin({ email, password })
+  }
+
+  const onSignup=()=>{
+    navigate('/signup')
   }
 
   return (
