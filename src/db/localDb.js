@@ -1,7 +1,7 @@
 import Dexie from 'dexie'
 
 export const LOCAL_DB_NAME = 'IntelligentCanvasLocal'
-export const LOCAL_DB_VERSION = 3
+export const LOCAL_DB_VERSION = 5
 
 // HMR에서도 이전 스키마 연결만 교체하고 같은 DB와 기존 레코드를 보존한다.
 const cachedDb = import.meta.hot?.data.localDb
@@ -22,6 +22,13 @@ if (!reusable) {
   localDb.version(3).stores({
     layers: '[uid+artworkId+layerId], [uid+artworkId+sortOrder]',
     layerContents: '[uid+artworkId+layerId]',
+  })
+  localDb.version(4).stores({
+    artworkSync: '[uid+artworkId]',
+    syncQueue: '[uid+artworkId], uid',
+  })
+  localDb.version(5).stores({
+    recoveryDrafts: 'draftId, [uid+artworkId]',
   })
 }
 if (import.meta.hot) import.meta.hot.data.localDb = localDb

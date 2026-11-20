@@ -184,7 +184,9 @@ try {
       return route.abort()
     }
     if (url.pathname === '/__canvas-fixture') return route.fulfill({ contentType: 'text/html', body: '<!doctype html><title>Isolated migration fixture</title>' })
-    if (url.port === '8080' && /artworks|editSession|revisions/.test(request.postData() || url.pathname)) forbiddenRequests.push('server-artwork-request')
+    const payload = request.postData() || url.pathname
+    if (url.port === '8080' && (/editSession|revisions/.test(payload)
+      || (/artworks/.test(payload) && !/\/Listen\/channel$/.test(url.pathname)))) forbiddenRequests.push('server-artwork-request')
     if (!['5188', '9099', '8080'].includes(url.port)) forbiddenRequests.push(url.origin)
     return route.continue()
   })
@@ -316,7 +318,7 @@ try {
       const { localDb } = await import('/src/db/localDb.js')
       return { version: localDb.verno, tables: localDb.tables.map(t => t.name).sort(), count: await localDb.artworks.count() }
     })
-    assert.deepEqual(state, { version: 3, tables: ['artworks', 'canvasContents', 'layerContents', 'layers'], count: 3 })
+    assert.deepEqual(state, { version: 5, tables: ['artworkSync', 'artworks', 'canvasContents', 'layerContents', 'layers', 'recoveryDrafts', 'syncQueue'], count: 3 })
     assert.deepEqual(await artwork(legacy.artworkId), legacy)
     await open(legacy.artworkId)
     assert.equal((await pixels()).opaque, 0)
@@ -455,10 +457,12 @@ try {
   await check('color_picker_and_non_drawing_rerenders_preserve_pixels', async () => {
     const savedBefore = await rawContent(artA.artworkId)
     await page.locator('.openColorPicker').click()
-    const square = await page.locator('.color-picker-square').boundingBox()
+    const pickerSquare = page.locator('.color-picker-square')
+    const square = await pickerSquare.boundingBox()
     // 둥근 모서리 바깥은 색상환에 속한다. 채도/명도 사각형 내부를 누른다.
-    await page.mouse.click(square.x + square.width - 5, square.y + 5)
+    await pickerSquare.click({ position: { x: square.width - 5, y: 5 } })
     await page.locator('.color-picker-header button').click()
+    await page.locator('.color-picker-menu').waitFor({ state: 'hidden' })
     assert.deepEqual(await pixels(), latestPixels)
     assert.equal((await rawContent(artA.artworkId)).savedAt, savedBefore.savedAt)
     await stroke([[650, 150], [800, 150]])

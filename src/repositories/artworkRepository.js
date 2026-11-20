@@ -1,5 +1,7 @@
 import Dexie, { liveQuery } from 'dexie'
 import { localDb } from '../db/localDb'
+import { artworkWriteGuard, rememberNewLocalArtwork } from '../services/editSessionService'
+import { noteArtworkChange, readArtworkSync } from './artworkSyncRepository'
 
 export const DEFAULT_ARTWORK = Object.freeze({ title: '제목 없음', width: 800, height: 800, backgroundColor: '#ffffff' })
 // 현재 UI/계획서에는 상한이 없어 메타데이터 입력에만 적용하는 초기 한도다.
@@ -139,17 +141,22 @@ export async function createArtwork(uid, input = {}) {
     await localDb.artworks.add(artwork)
     assertUser(auth, uid) // 계정이 바뀌었다면 트랜잭션을 취소한다.
   })
+  rememberNewLocalArtwork(uid, artwork.artworkId)
   return artwork
 }
 
 export async function renameArtwork(uid, artworkId, value) {
   const auth = await scopedAuth(uid)
   const title = normalizeArtworkTitle(value)
-  return localDb.transaction('rw', localDb.artworks, async () => {
+  const checkWrite = await artworkWriteGuard(uid, artworkId)
+  return localDb.transaction('rw', localDb.artworks, localDb.artworkSync, localDb.syncQueue, async () => {
     const artwork = await readArtwork(auth, uid, artworkId)
+    checkWrite()
     if (artwork.title === title) return artwork
     const changes = { title, titleNormalized: normalizeSearch(title), updatedAt: Date.now() }
     await localDb.artworks.update([uid, artworkId], changes)
+    await noteArtworkChange(uid, artworkId)
+    checkWrite()
     assertUser(auth, uid)
     return { ...artwork, ...changes }
   })
@@ -157,11 +164,15 @@ export async function renameArtwork(uid, artworkId, value) {
 
 export async function deleteArtwork(uid, artworkId) {
   const auth = await scopedAuth(uid)
-  return localDb.transaction('rw', localDb.artworks, async () => {
+  const checkWrite = await artworkWriteGuard(uid, artworkId)
+  return localDb.transaction('rw', localDb.artworks, localDb.artworkSync, async () => {
     await readArtwork(auth, uid, artworkId)
+    checkWrite()
+    if (await readArtworkSync(uid, artworkId)) throw artworkError('artwork/read-only', '서버 등록을 시작한 작품은 이 단계에서 삭제할 수 없습니다.')
     const now = Date.now()
     // 계획서의 삭제 표식. 서버 동기화/휴지통 복원은 아직 구현하지 않는다.
     await localDb.artworks.update([uid, artworkId], { state: 'deleted', deletedAt: now, updatedAt: now })
+    checkWrite()
     assertUser(auth, uid)
   })
 }

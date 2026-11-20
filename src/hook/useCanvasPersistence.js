@@ -5,15 +5,17 @@ import { openLayerDocument, saveLayerChanges } from '../repositories/layerReposi
 import { canvasImageError, extractCanvasPng, prepareCanvas } from '../services/canvasImage'
 import { createLayerCanvas } from '../services/layerCanvas'
 import { registerPendingCanvasEditor } from '../services/pendingCanvasChanges'
+import { canWriteOpenArtwork } from '../services/editSessionService'
 
 const loadingState = { status: 'loading', ready: false, locked: false, error: '', failure: null, layers: [], activeId: null }
 
-export function useCanvasPersistence({ uid, artworkId, width, height }, canvasApi) {
+export function useCanvasPersistence({ uid, artworkId, width, height }, canvasApi, serverSnapshot) {
   const sessionRef = useRef(null)
   const [attempt, setAttempt] = useState(0)
   const [state, setState] = useState(loadingState)
   const blocker = useBlocker(useCallback(({ currentLocation, nextLocation }) =>
-    currentLocation.pathname !== nextLocation.pathname && !!sessionRef.current?.dirty(), []))
+    (currentLocation.pathname !== nextLocation.pathname || currentLocation.search !== nextLocation.search)
+      && !!sessionRef.current?.dirty(), []))
   const blockedTask = useRef(null)
 
   useEffect(() => {
@@ -21,7 +23,7 @@ export function useCanvasPersistence({ uid, artworkId, width, height }, canvasAp
     const session = {
       disposed: false, ready: false, activeStroke: false, locks: 0, timer: null, busy: null,
       error: '', failure: null, hadContent: false, layers: [], activeId: null, previousIds: [],
-      revision: 0, metadataRevision: 0, dirtyPixels: new Map(),
+      revision: 0, metadataRevision: 0, dirtyPixels: new Map(), initialContents: null,
     }
     let renderer
     const unsaved = () => session.metadataRevision > 0 || session.dirtyPixels.size > 0
@@ -42,6 +44,7 @@ export function useCanvasPersistence({ uid, artworkId, width, height }, canvasAp
     }
     const pump = () => {
       clearTimeout(session.timer)
+      if (serverSnapshot) return Promise.resolve()
       if (session.busy) return session.busy
       if (!session.ready || session.disposed || session.activeStroke || !unsaved()) return Promise.resolve()
       session.error = ''
@@ -51,8 +54,10 @@ export function useCanvasPersistence({ uid, artworkId, width, height }, canvasAp
         try {
           while (session.ready && !session.disposed && !session.activeStroke && unsaved()) {
             const metadataRevision = session.metadataRevision
-            const layers = metadataRevision ? session.layers : undefined
+            const layers = metadataRevision || session.initialContents ? session.layers : undefined
             const pixels = [...session.dirtyPixels]
+            const initialContents = session.initialContents?.filter(content =>
+              layers.some(layer => layer.layerId === content.layerId) && !session.dirtyPixels.has(content.layerId)) ?? []
             // 각 toBlob이 호출 시점의 픽셀을 캡처한다. 이후 새 획은 다음 저장에 속한다.
             const contents = await Promise.all(pixels.map(async ([layerId]) => {
               const original = renderer.getOriginal(layerId, false)
@@ -60,7 +65,8 @@ export function useCanvasPersistence({ uid, artworkId, width, height }, canvasAp
               return { layerId, pngBlob: await extractCanvasPng(original), width, height }
             }))
             if (session.disposed || !session.ready) return
-            await saveLayerChanges(uid, artworkId, { previousIds: session.previousIds, layers, contents })
+            await saveLayerChanges(uid, artworkId, { previousIds: session.previousIds, layers, contents: [...contents, ...initialContents] })
+            session.initialContents = null
             if (layers) session.previousIds = layers.map(layer => layer.layerId)
             if (session.metadataRevision === metadataRevision) session.metadataRevision = 0
             for (const [layerId, revision] of pixels) {
@@ -93,7 +99,8 @@ export function useCanvasPersistence({ uid, artworkId, width, height }, canvasAp
       emit()
       return () => { session.locks = Math.max(0, session.locks - 1); emit() }
     }
-    const canEdit = () => session.ready && !session.locks && !session.disposed
+    const canView = () => session.ready && !session.locks && !session.disposed
+    const canEdit = () => !serverSnapshot && canView() && canWriteOpenArtwork(uid, artworkId)
     const schedule = () => {
       emit()
       if (!session.ready || session.disposed || !unsaved()) return
@@ -114,6 +121,7 @@ export function useCanvasPersistence({ uid, artworkId, width, height }, canvasAp
     }
     sessionRef.current = {
       dirty, flush, lock,
+      canEdit,
       original: (layerId, allocate) => canEdit() ? renderer.getOriginal(layerId, allocate) : undefined,
       compose,
       start: () => { if (canEdit()) { clearTimeout(session.timer); session.activeStroke = true; emit() } },
@@ -124,7 +132,7 @@ export function useCanvasPersistence({ uid, artworkId, width, height }, canvasAp
       },
       renderError,
       select: layerId => {
-        if (!canEdit() || !session.layers.some(layer => layer.layerId === layerId)) return
+        if (!canView() || !session.layers.some(layer => layer.layerId === layerId)) return
         session.activeId = layerId
         emit()
       },
@@ -145,7 +153,7 @@ export function useCanvasPersistence({ uid, artworkId, width, height }, canvasAp
         schedule()
       },
     }
-    const unregister = registerPendingCanvasEditor(sessionRef.current)
+    const unregister = serverSnapshot ? null : registerPendingCanvasEditor(sessionRef.current)
     const onBeforeUnload = event => {
       if (!dirty()) return
       void flush().catch(() => {})
@@ -161,14 +169,15 @@ export function useCanvasPersistence({ uid, artworkId, width, height }, canvasAp
           canvasApi.current?.finishStroke()
           renderError(canvasImageError('레이어 픽셀을 읽을 수 없습니다. 마지막 저장본을 다시 불러와 주세요.'))
         })
-        const { layers, contents } = await openLayerDocument(uid, artworkId, {
-          prepare: document => renderer.restore(document, abort.signal),
-          signal: abort.signal,
+        const { layers, contents, unpersisted } = serverSnapshot ?? await openLayerDocument(uid, artworkId, {
+          prepare: document => renderer.restore(document, abort.signal), signal: abort.signal,
         })
+        if (serverSnapshot) await renderer.restore(serverSnapshot, abort.signal)
         if (session.disposed) return
         session.layers = layers
         session.activeId = layers[0].layerId
-        session.previousIds = layers.map(layer => layer.layerId)
+        session.previousIds = unpersisted ? [] : layers.map(layer => layer.layerId)
+        session.initialContents = unpersisted ? contents : null
         session.ready = true
         session.hadContent = !!contents.length
         emit()
@@ -182,13 +191,13 @@ export function useCanvasPersistence({ uid, artworkId, width, height }, canvasAp
       clearTimeout(session.timer)
       abort.abort()
       renderer?.release()
-      unregister()
+      unregister?.()
       window.removeEventListener('beforeunload', onBeforeUnload)
       document.removeEventListener('visibilitychange', onVisibility)
       sessionRef.current = null
     }
     // artwork.updatedAt 변경은 복원을 다시 실행하지 않는다.
-  }, [uid, artworkId, width, height, attempt, canvasApi])
+  }, [uid, artworkId, width, height, attempt, canvasApi, serverSnapshot])
 
   useEffect(() => {
     if (blocker.state !== 'blocked') { blockedTask.current = null; return }
@@ -213,6 +222,7 @@ export function useCanvasPersistence({ uid, artworkId, width, height }, canvasAp
   }
   return {
     ...state,
+    canDraw: () => sessionRef.current?.canEdit() === true,
     blocked: blocker.state === 'blocked',
     onStrokeStart: () => sessionRef.current?.start(),
     onStrokeEnd: (layerId, changed) => sessionRef.current?.end(layerId, changed),

@@ -33,6 +33,7 @@ const fixtureSource = String.raw`
   import { checkServerEnvironment, storage } from '/src/config/firebaseServerEmulators.js'
   export { runServerEmulatorSmokeTest as smoke } from '/src/dev/serverEmulatorSmokeTest.js'
   export { registerUser } from '/src/services/authService.js'
+  export { ensureUserProfile, updateNickname } from '/src/services/userService.js'
   export async function authSignup({ email, password }) {
     return (await createUserWithEmailAndPassword(auth, email, password)).user.uid
   }
@@ -191,11 +192,27 @@ try {
 
   await check('another_uid_cannot_read_or_write_the_artwork_and_profile', async () => {
     await firestoreDenied('get', `users/${a}`)
+    await firestoreDenied('update', `users/${a}`, { nickname: 'tampered' })
     await firestoreDenied('get', artwork)
     await firestoreDenied('get', layer)
     await firestoreDenied('list', `users/${a}/artworks`, a)
     await firestoreDenied('update', artwork, { serverVersion: 9 })
     await storageDenied('upload', objectPath, 'wrong user')
+  })
+
+  await check('profile_nicknames_can_match_and_ownership_fields_are_immutable', async () => {
+    const otherProfile = await invoke('ensureUserProfile', b, '5-A 테스트')
+    await invoke('logout')
+    assert.equal(await invoke('login', aLogin.email, password), a)
+    const oldProfile = await invoke('get', `users/${a}`)
+    await invoke('updateNickname', a, '다른 이름')
+    const current = await invoke('updateNickname', a, otherProfile.nickname)
+    assert.equal(current.nickname, otherProfile.nickname)
+    assert.equal(current.uid, a)
+    assert.deepEqual(current.createdAt, oldProfile.createdAt)
+    for (const change of [{ uid: b }, { createdAt: 'tampered' }, { schemaVersion: 9 }, { password: 'forbidden' }]) {
+      await firestoreDenied('update', `users/${a}`, change)
+    }
   })
 
   await invoke('logout')

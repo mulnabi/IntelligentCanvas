@@ -2,7 +2,7 @@ import { useEffect, useImperativeHandle, useState, useRef } from 'react'
 import { canAllocateCanvas, canvasImageError } from '../../services/canvasImage'
 
 function DrawCanvas({
-  toolInfo, artwork, canvasApi, activeLayer, ready, locked, getLayerCanvas, compose,
+  toolInfo, artwork, canvasApi, activeLayer, ready, locked, readOnly, canDraw, getLayerCanvas, compose,
   onStrokeStart, onStrokeEnd, onRenderError, onInputError,
 }) {
   const { width, height, backgroundColor } = artwork
@@ -52,7 +52,7 @@ function DrawCanvas({
     return () => element.removeEventListener('contextlost', drawingError)
   })
   const onPointerDown = event => {
-    if (!ready || locked || !allocated || event.button !== 0 || pointer.id !== null || !['pen', 'eraser'].includes(toolInfo.tool)) return
+    if (!canDraw() || !allocated || event.button !== 0 || pointer.id !== null || !['pen', 'eraser'].includes(toolInfo.tool)) return
     if (!activeLayer?.visible) return
     const p = point(event)
     if (p.x < 0 || p.y < 0 || p.x >= width || p.y >= height) return
@@ -85,6 +85,7 @@ function DrawCanvas({
   }
   const onPointerMove = event => {
     if (!ready || pointer.id !== event.pointerId) return
+    if (!canDraw()) { finishStroke(); return }
     try {
       const from = { x: pointer.x, y: pointer.y }
       const to = point(event)
@@ -109,7 +110,7 @@ function DrawCanvas({
       onPointerUp={onPointerUp} onPointerCancel={onPointerUp} onLostPointerCapture={onPointerUp}
     >
       <canvas ref={canvas} className="drawcanvas" width={allocated ? width : 1} height={allocated ? height : 1}
-        data-ready={ready && !locked} aria-busy={!ready || locked}
+        data-ready={ready && !locked} data-read-only={readOnly} aria-busy={!ready || locked}
         style={{ background: backgroundColor, transform: `translate(calc(-50% + ${pos.x}px), calc(-50% + ${pos.y}px))scale(${scale})` }}
       />
     </div>

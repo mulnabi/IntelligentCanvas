@@ -95,7 +95,10 @@ try {
       return route.abort()
     }
     // 이번 단계에서 작품/Storage/Functions 요청이 생기면 테스트 실패로 기록한다.
-    if (url.port === '8080' && /artworks|editSession|revisions/.test(request.postData() || url.pathname)) forbiddenRequests.push('server-artwork-request')
+    // 5-B는 등록 여부를 Listen으로 읽는다. 작품 쓰기와 세션 경로 접근은 감시한다.
+    const payload = request.postData() || url.pathname
+    if (url.port === '8080' && (/editSession|revisions/.test(payload)
+      || (/artworks/.test(payload) && !/\/Listen\/channel$/.test(url.pathname)))) forbiddenRequests.push('server-artwork-request')
     if (!['5187', '9099', '8080'].includes(url.port)) forbiddenRequests.push(url.origin)
     return route.continue()
   })
@@ -253,7 +256,7 @@ try {
       await localDb.open()
       return { name: localDb.name, version: localDb.verno, tables: localDb.tables.map(t => t.name), count: await localDb.artworks.count() }
     })
-    assert.deepEqual(info, { name: 'IntelligentCanvasLocal', version: 3, tables: ['artworks', 'canvasContents', 'layers', 'layerContents'], count: 3 })
+    assert.deepEqual(info, { name: 'IntelligentCanvasLocal', version: 5, tables: ['artworks', 'canvasContents', 'layers', 'layerContents', 'artworkSync', 'syncQueue', 'recoveryDrafts'], count: 3 })
     assert.equal(await currentUid(), uidA)
   })
   await check('query_error_and_retry', async () => {
@@ -383,7 +386,7 @@ try {
     await page.evaluate(async ({ uid, id }) => (await import('/src/repositories/artworkRepository.js')).deleteArtwork(uid, id), { uid: uidA, id: blank.artworkId })
     await titles(['A2 연습', 'A1 수정'])
     const tables = await page.evaluate(async () => (await import('/src/db/localDb.js')).localDb.tables.map(t => t.name))
-    assert.deepEqual(tables, ['artworks', 'canvasContents', 'layers', 'layerContents'])
+    assert.deepEqual(tables, ['artworks', 'canvasContents', 'layers', 'layerContents', 'artworkSync', 'syncQueue', 'recoveryDrafts'])
   })
   await check('mobile_existing_layout_and_new_menu', async () => {
     await page.setViewportSize({ width: 390, height: 844 })

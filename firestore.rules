@@ -56,7 +56,8 @@ service cloud.firestore {
         return request.auth != null && request.auth.uid == uid;
       }
 
-      allow get, list: if isArtworkOwner() && resource.data.ownerUid == uid;
+      allow get: if isArtworkOwner() && (resource == null || resource.data.ownerUid == uid);
+      allow list: if isArtworkOwner() && resource.data.ownerUid == uid;
       allow write: if false;
 
       match /layers/{layerId} {

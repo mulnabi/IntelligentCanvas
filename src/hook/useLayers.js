@@ -11,6 +11,12 @@ export function useLayers({ layers, activeId, selectLayer, changeLayers }) {
     if (!layer || layer.opacity === opacity || !Number.isFinite(opacity) || opacity < 0 || opacity > 1) return
     return { layers: layers.map(layer => layer.layerId === id ? { ...layer, opacity } : layer) }
   })
+  const rename = (id, value) => changeLayers(layers => {
+    if (typeof value !== 'string') return
+    const name = value.trim()
+    if (!name || name.length > 80 || !layers.some(layer => layer.layerId === id && layer.name !== name)) return
+    return { layers: layers.map(layer => layer.layerId === id ? { ...layer, name } : layer) }
+  })
 
   // 선택한 레이어 바로 위에 빈 레이어를 삽입한다.
   const add = () => changeLayers((layers, activeId) => {
@@ -43,5 +49,5 @@ export function useLayers({ layers, activeId, selectLayer, changeLayers }) {
     return { layers: next }
   })
 
-  return { layers, activeId, select: selectLayer, toggle, setOpacity, add, remove, move }
+  return { layers, activeId, select: selectLayer, toggle, setOpacity, rename, add, remove, move }
 }

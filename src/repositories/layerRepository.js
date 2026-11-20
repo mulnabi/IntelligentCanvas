@@ -2,6 +2,8 @@ import Dexie from 'dexie'
 import { localDb } from '../db/localDb'
 import { assertUser, readArtwork, scopedAuth } from './artworkRepository'
 import { getCanvasContent, validatePngHeader } from './canvasRepository'
+import { artworkWriteGuard } from '../services/editSessionService'
+import { noteArtworkChange } from './artworkSyncRepository'
 
 function layerError(message) {
   return Object.assign(new Error(message), { code: 'canvas/layers' })
@@ -68,9 +70,15 @@ export async function openLayerDocument(uid, artworkId, { prepare, signal }) {
   const contents = legacy ? [{ ...legacy, layerId: layers[0].layerId }] : []
   await prepare({ layers, contents })
   signal.throwIfAborted()
+  let checkWrite
+  try { checkWrite = await artworkWriteGuard(uid, artworkId) } catch (error) {
+    if (error.code !== 'artwork/read-only') throw error
+    return { layers, contents, unpersisted: true }
+  }
   const initialized = await localDb.transaction('rw', localDb.artworks, localDb.canvasContents, localDb.layers, localDb.layerContents, async () => {
     await readArtwork(auth, uid, artworkId)
     signal.throwIfAborted()
+    checkWrite()
     if ((await listLayers(uid, artworkId)).length) return false
     const current = await localDb.canvasContents.get([uid, artworkId])
     if (current?.savedAt !== legacy?.savedAt || current?.pngBlob.size !== legacy?.pngBlob.size) {
@@ -78,6 +86,7 @@ export async function openLayerDocument(uid, artworkId, { prepare, signal }) {
     }
     await localDb.layers.add(layers[0])
     if (contents.length) await localDb.layerContents.add(contents[0])
+    checkWrite()
     signal.throwIfAborted()
     assertUser(auth, uid)
     return true
@@ -89,10 +98,12 @@ export async function openLayerDocument(uid, artworkId, { prepare, signal }) {
 
 export async function saveLayerChanges(uid, artworkId, { previousIds, layers, contents }) {
   const auth = await scopedAuth(uid)
+  const checkWrite = await artworkWriteGuard(uid, artworkId)
   const rows = layers && prepareLayerRows(uid, artworkId, layers)
   for (const { pngBlob, width, height } of contents) await validatePngHeader(pngBlob, width, height)
-  return localDb.transaction('rw', localDb.artworks, localDb.layers, localDb.layerContents, async () => {
+  return localDb.transaction('rw', [localDb.artworks, localDb.layers, localDb.layerContents, localDb.artworkSync, localDb.syncQueue], async () => {
     const artwork = await readArtwork(auth, uid, artworkId)
+    checkWrite()
     const current = await listLayers(uid, artworkId)
     const expectedIds = new Set(previousIds)
     if (current.length !== expectedIds.size || current.some(layer => !expectedIds.has(layer.layerId))) {
@@ -113,6 +124,8 @@ export async function saveLayerChanges(uid, artworkId, { previousIds, layers, co
     }
     if (changed.length) await localDb.layerContents.bulkPut(changed)
     await localDb.artworks.update([uid, artworkId], { updatedAt: savedAt })
+    await noteArtworkChange(uid, artworkId)
+    checkWrite()
     assertUser(auth, uid)
   })
 }

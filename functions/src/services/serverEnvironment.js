@@ -1,5 +1,6 @@
 const { HttpsError } = require('firebase-functions/v2/https')
-const { hasOwnProfile, localAdminAvailable } = require('../repositories/profileRepository')
+const { hasOwnProfile } = require('../repositories/profileRepository')
+const { localAdminAvailable } = require('../repositories/localFirestore')
 
 async function checkServerEnvironment(request) {
   const uid = request.auth?.uid

@@ -1,5 +1,7 @@
 import { localDb } from '../db/localDb'
 import { assertUser, getArtworkErrorMessage, MAX_ARTWORK_DIMENSION, readArtwork, scopedAuth } from './artworkRepository'
+import { artworkWriteGuard } from '../services/editSessionService'
+import { readArtworkSync } from './artworkSyncRepository'
 
 // 전체 PNG를 다루는 이번 단계의 파일 한도이며 기기의 Canvas 지원 보장은 아니다.
 export const MAX_CANVAS_PNG_BYTES = 128 * 1024 * 1024
@@ -70,16 +72,20 @@ export async function getCanvasContent(uid, artworkId) {
 
 export async function saveCanvasContent(uid, artworkId, { pngBlob, width, height }) {
   const auth = await scopedAuth(uid)
+  const checkWrite = await artworkWriteGuard(uid, artworkId)
   // toBlob()과 Blob 헤더 읽기를 모두 끝낸 뒤 쓰기 트랜잭션을 연다.
   await validatePngHeader(pngBlob, width, height)
   assertUser(auth, uid)
-  return localDb.transaction('rw', localDb.artworks, localDb.canvasContents, async () => {
+  return localDb.transaction('rw', localDb.artworks, localDb.canvasContents, localDb.artworkSync, async () => {
     const artwork = await readArtwork(auth, uid, artworkId)
+    checkWrite()
+    if (await readArtworkSync(uid, artworkId)) throw canvasError('canvas/legacy-write', '서버 작품은 레이어 원본으로 저장해 주세요.')
     assertContentSize(artwork, width, height)
     const savedAt = Date.now() // 로컬 시각. 서버 Timestamp/서버 저장 확정이 아니다.
     const content = { uid, artworkId, pngBlob, width, height, savedAt, schemaVersion: 1 }
     await localDb.canvasContents.put(content)
     await localDb.artworks.update([uid, artworkId], { updatedAt: savedAt })
+    checkWrite()
     assertUser(auth, uid)
     // 두 쓰기가 모두 성공한 경우에만 커밋한다. 실패하면 이전 PNG와 updatedAt을 함께 보존한다.
     return content

@@ -15,7 +15,7 @@ const Icon = ({ name }) => (
   <svg viewBox="0 0 32 32"><path d={icons[name]} /></svg>
 )
 
-function LayerPanel({ layers, activeId, select, toggle, setOpacity, add, remove, move, disabled, Close }) {
+function LayerPanel({ layers, activeId, select, toggle, setOpacity, rename, add, remove, move, disabled, Close }) {
   const [drag, setDrag] = useState(null) 
   const dragged = useRef(false)          // 끌고 난 직후 클릭 통제
 
@@ -91,7 +91,7 @@ function LayerPanel({ layers, activeId, select, toggle, setOpacity, add, remove,
               onPointerUp={dragEnd}
               onPointerCancel={() => setDrag(null)}>
               <span className="layer-grip"><Icon name="grip" /></span>
-              <button className="layer-select" disabled={disabled} aria-pressed={id === activeId} onClick={() => { if (!dragged.current) select(id) }}>
+              <button className="layer-select" aria-pressed={id === activeId} onClick={() => { if (!dragged.current) select(id) }}>
                 <span className="layer-thumb"></span>
                 <span className="layer-name">{layer.name}</span>
                 {layer.category && <span className="layer-tag">{layer.category}</span>}
@@ -111,6 +111,10 @@ function LayerPanel({ layers, activeId, select, toggle, setOpacity, add, remove,
             onChange={e => setOpacity(activeId, e.target.value / 100)} />
           <span>{opacity}%</span>
         </label>
+        <button disabled={disabled} onClick={() => {
+          const name = window.prompt('레이어 이름 (1~80자)', active.name)
+          if (name !== null) rename(activeId, name)
+        }}>이름 변경</button>
         <button className="layer-delete" disabled={disabled || layers.length <= 1} onClick={() => remove(activeId)}>
           레이어 삭제
         </button>
