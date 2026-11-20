@@ -2,6 +2,12 @@
   "projects": {
     "default": "ai-drawing-a9177"
   },
-  "targets": {},
+  "targets": {
+    "ai-drawing-a9177": {
+      "storage": {
+        "stage5a-local": ["intelligentcanvas-stage5a-local.invalid"]
+      }
+    }
+  },
   "etags": {}
 }

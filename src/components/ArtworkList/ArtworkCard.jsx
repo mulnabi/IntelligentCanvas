@@ -1,12 +1,18 @@
-function ArtworkCard({ artwork, onClick }) {
+function ArtworkCard({ artwork, onClick, onMore }) {
   const handleMore = (e) => {
     e.stopPropagation()
-    // TODO: 이름변경 / 복제 / 삭제 메뉴
-    console.log('더보기', artwork.id)
+    onMore(artwork)
   }
 
   return (
-    <div className="artwork-card" onClick={() => onClick(artwork)}>
+    <div className="artwork-card" data-artwork-id={artwork.artworkId} role="button" tabIndex={0}
+      aria-label={`${artwork.title} 열기`} onClick={() => onClick(artwork)}
+      onKeyDown={event => {
+        if (event.target === event.currentTarget && ['Enter', ' '].includes(event.key)) {
+          event.preventDefault()
+          onClick(artwork)
+        }
+      }}>
       <div className="thumb">
         {artwork.thumbnail ? (
           <img src={artwork.thumbnail} alt={artwork.title} />
@@ -18,10 +24,10 @@ function ArtworkCard({ artwork, onClick }) {
         <div>
           <div className="card-title">{artwork.title}</div>
           <div className="card-sub">
-            {artwork.updatedAt} · 레이어 {artwork.layerCount}
+            {new Date(artwork.updatedAt).toLocaleString('ko-KR')} · {artwork.width} × {artwork.height}px
           </div>
         </div>
-        <button className="more-button" onClick={handleMore}>
+        <button className="more-button" onClick={handleMore} aria-label={`${artwork.title} 관리`}>
           ⋮
         </button>
       </div>

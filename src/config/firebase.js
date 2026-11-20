@@ -1,18 +1,20 @@
 import { deleteApp, getApps, initializeApp } from 'firebase/app'
-import { connectAuthEmulator, initializeAuth, inMemoryPersistence } from 'firebase/auth'
+import { browserLocalPersistence, connectAuthEmulator, initializeAuth, inMemoryPersistence } from 'firebase/auth'
 import { connectFirestoreEmulator, getFirestore, terminate } from 'firebase/firestore'
 
 export const firebaseEmulators = Object.freeze({
   auth: 'http://127.0.0.1:9099',
   firestoreHost: '127.0.0.1',
   firestorePort: 8080,
+  storagePort: 9199,
+  functionsPort: 5001,
 })
 
 function configurationError(message) {
   return new Error(`[Firebase 설정] ${message}`)
 }
 
-// 1단계에서는 운영 연결을 제공하지 않는다. 실패 시 운영으로 전환하지 않는다.
+// 로컬 개발 단계에서는 운영 연결을 제공하지 않는다. 실패 시 운영으로 전환하지 않는다.
 export function assertEmulatorEnvironment() {
   if (!import.meta.env.DEV) {
     throw configurationError('현재 Firebase 모듈은 개발용 Emulator에서만 사용할 수 있습니다.')
@@ -68,7 +70,10 @@ export function createEmulatorClients(name = '[DEFAULT]') {
   }
 
   const app = initializeApp(firebaseConfig, name)
-  const auth = initializeAuth(app, { persistence: inMemoryPersistence })
+  // 일반 앱만 로그인 상태를 유지한다. 별도 테스트 앱은 기존처럼 메모리에 격리한다.
+  const auth = initializeAuth(app, {
+    persistence: name === '[DEFAULT]' ? browserLocalPersistence : inMemoryPersistence,
+  })
   connectAuthEmulator(auth, firebaseEmulators.auth, { disableWarnings: true })
   const db = getFirestore(app)
   connectFirestoreEmulator(db, firebaseEmulators.firestoreHost, firebaseEmulators.firestorePort)

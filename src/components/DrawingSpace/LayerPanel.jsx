@@ -15,7 +15,7 @@ const Icon = ({ name }) => (
   <svg viewBox="0 0 32 32"><path d={icons[name]} /></svg>
 )
 
-function LayerPanel({ layers, activeId, select, toggle, setOpacity, add, remove, move, Close }) {
+function LayerPanel({ layers, activeId, select, toggle, setOpacity, add, remove, move, disabled, Close }) {
   const [drag, setDrag] = useState(null) 
   const dragged = useRef(false)          // 끌고 난 직후 클릭 통제
 
@@ -31,7 +31,7 @@ function LayerPanel({ layers, activeId, select, toggle, setOpacity, add, remove,
 
   const dragStart = (e, id, index) => {
     dragged.current = false
-    if (layers.length < 2) return
+    if (disabled || e.button !== 0 || layers.length < 2) return
     if (e.target.closest('.layer-eye')) return
     if (e.pointerType !== 'mouse' && !e.target.closest('.layer-grip')) return
     setDrag({ id, from: index, startY: e.clientY, dy: 0, moving: false })
@@ -55,17 +55,12 @@ function LayerPanel({ layers, activeId, select, toggle, setOpacity, add, remove,
   setTimeout(() => { dragged.current = false }, 0) 
 }
 
-// 
-const dragLeave = () => {
-  if (drag && !drag.moving) setDrag(null)
-}
-
   return (
     <section className="layer-panel">
       <header className="layer-head">
         <h2>레이어</h2>
         <span className="layer-count">{layers.length}</span>
-        <button className="layer-add" title="레이어 추가" onClick={add}><Icon name="plus" /></button>
+        <button className="layer-add" title="레이어 추가" disabled={disabled} onClick={add}><Icon name="plus" /></button>
         <button className="layer-close" title="닫기" onClick={Close}><Icon name="close" /></button>
       </header>
 
@@ -96,12 +91,12 @@ const dragLeave = () => {
               onPointerUp={dragEnd}
               onPointerCancel={() => setDrag(null)}>
               <span className="layer-grip"><Icon name="grip" /></span>
-              <button className="layer-select" onClick={() => { if (!dragged.current) select(id) }}>
+              <button className="layer-select" disabled={disabled} aria-pressed={id === activeId} onClick={() => { if (!dragged.current) select(id) }}>
                 <span className="layer-thumb"></span>
                 <span className="layer-name">{layer.name}</span>
                 {layer.category && <span className="layer-tag">{layer.category}</span>}
               </button>
-              <button className="layer-eye" title="보이기/숨기기" onClick={() => toggle(id)}>
+              <button className="layer-eye" title="보이기/숨기기" disabled={disabled} aria-pressed={layer.visible} onClick={() => toggle(id)}>
                 <Icon name={layer.visible ? 'eye' : 'eyeOff'} />
               </button>
             </li>
@@ -112,11 +107,11 @@ const dragLeave = () => {
       <div className="layer-bottom">
         <label className="layer-opacity">
           불투명도
-          <input type="range" min="0" max="100" value={opacity}
+          <input type="range" min="0" max="100" value={opacity} disabled={disabled}
             onChange={e => setOpacity(activeId, e.target.value / 100)} />
           <span>{opacity}%</span>
         </label>
-        <button className="layer-delete" disabled={layers.length <= 1} onClick={() => remove(activeId)}>
+        <button className="layer-delete" disabled={disabled || layers.length <= 1} onClick={() => remove(activeId)}>
           레이어 삭제
         </button>
       </div>

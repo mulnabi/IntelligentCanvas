@@ -1,13 +1,17 @@
-import { useState } from 'react'
+import { useRef, useState } from 'react'
+import { getAuthErrorMessage } from '../services/authService'
 import './Auth.css'
 
-function LoginPage({ onLogin, onSignup }) {
+function LoginPage({ onLogin, onSignup, authLoading = false, authError = '' }) {
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [error, setError] = useState('')
+  const [submitting, setSubmitting] = useState(false)
+  const inFlight = useRef(false)
 
-  const handleSubmit = (event) => {
+  const handleSubmit = async (event) => {
     event.preventDefault()
+    if (inFlight.current || authLoading || authError) return
 
     if (!email || !password) {
       setError('이메일과 비밀번호를 모두 입력해 주세요.')
@@ -15,19 +19,29 @@ function LoginPage({ onLogin, onSignup }) {
     }
 
     setError('')
-    onLogin({ email, password })
+    inFlight.current = true
+    setSubmitting(true)
+    try {
+      await onLogin({ email: email.trim(), password })
+    } catch (error) {
+      setError(getAuthErrorMessage(error))
+    } finally {
+      inFlight.current = false
+      setSubmitting(false)
+    }
   }
 
   return (
     <main className="auth-page">
       <section className="auth-card">
         <div className="auth-placeholder" aria-hidden="true" />
-        <form className="auth-form login-form" onSubmit={handleSubmit}>
+        <form className="auth-form login-form" onSubmit={handleSubmit} aria-busy={submitting || authLoading}>
           <div className="auth-field">
             <label htmlFor="login-email">이메일</label>
             <input
               autoComplete="email"
               id="login-email"
+              disabled={submitting}
               onChange={(e) => setEmail(e.target.value)}
               placeholder="이메일을 입력해 주세요"
               required
@@ -40,6 +54,7 @@ function LoginPage({ onLogin, onSignup }) {
             <input
               autoComplete="current-password"
               id="login-password"
+              disabled={submitting}
               onChange={(e) => setPassword(e.target.value)}
               placeholder="비밀번호를 입력해 주세요"
               required
@@ -48,14 +63,15 @@ function LoginPage({ onLogin, onSignup }) {
             />
           </div>
 
-          {error && <p className="auth-error" role="alert">{error}</p>}
+          {(error || authError) && <p className="auth-error" role="alert">{error || authError}</p>}
 
-          <button className="auth-button auth-button--primary" type="submit">
-            로그인
+          <button className="auth-button auth-button--primary" type="submit" disabled={submitting || authLoading || !!authError}>
+            {submitting ? '로그인 중…' : authLoading ? '로그인 상태 확인 중…' : '로그인'}
           </button>
           <button
             className="auth-button auth-button--secondary"
             onClick={onSignup}
+            disabled={submitting}
             type="button"
           >
             회원가입

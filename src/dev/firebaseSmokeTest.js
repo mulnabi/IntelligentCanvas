@@ -1,5 +1,5 @@
 import { createUserWithEmailAndPassword, deleteUser, signInWithEmailAndPassword, signOut } from 'firebase/auth'
-import { deleteDoc, doc, getDocFromServer, serverTimestamp, setDoc, Timestamp } from 'firebase/firestore'
+import { deleteDoc, doc, getDocFromServer, serverTimestamp, setDoc, terminate, Timestamp } from 'firebase/firestore'
 import { assertEmulatorEnvironment, createEmulatorClients, disposeEmulatorClients } from '../config/firebase'
 
 const checkNames = [
@@ -149,6 +149,9 @@ async function executeSmokeTest({ keepTestData = false } = {}) {
       other, `users/${expected.ownerUid}/connectionTests/other-${report.runId}`, payload(`other-${report.runId}`),
     ))
     await check('다른 UID 삭제 차단', () => expectDenied(() => deleteDoc(doc(other.db, report.documentPath))))
+    // 일반 앱의 Firestore 연결도 열려 있을 수 있으므로 끝난 테스트의 스트림을 먼저 정리한다.
+    // Auth 인스턴스는 계정 삭제를 위해 finally까지 유지한다.
+    await timeout(terminate(other.db))
     await check('비로그인 조회 차단', async () => {
       if (guest.auth.currentUser !== null) throw new Error('비로그인 검증 인스턴스에 사용자가 존재합니다.')
       await expectDenied(() => getDocFromServer(doc(guest.db, report.documentPath)))
@@ -156,6 +159,7 @@ async function executeSmokeTest({ keepTestData = false } = {}) {
     await check('비로그인 생성 차단', () => forbiddenCreate(
       guest, `users/${expected.ownerUid}/connectionTests/guest-${report.runId}`, payload(`guest-${report.runId}`),
     ))
+    await timeout(terminate(guest.db))
     await check('잘못된 문서 형식 차단', () => forbiddenCreate(
       owner, `users/${expected.ownerUid}/connectionTests/invalid-${report.runId}`,
       { ...payload(`invalid-${report.runId}`), unexpectedField: true },

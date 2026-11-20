@@ -1,0 +1,59 @@
+{
+  "results": [
+    {
+      "name": "four_emulators_and_ui_respond_on_loopback",
+      "status": "passed"
+    },
+    {
+      "name": "callable_rejects_signed_out_user",
+      "status": "passed"
+    },
+    {
+      "name": "web_sdk_calls_functions_and_storage_smoke_round_trip",
+      "status": "passed"
+    },
+    {
+      "name": "callable_uses_token_uid_and_rejects_client_uid",
+      "status": "passed"
+    },
+    {
+      "name": "another_uid_cannot_read_or_write_the_artwork_and_profile",
+      "status": "passed"
+    },
+    {
+      "name": "owner_reads_artwork_and_layer_with_narrow_queries",
+      "status": "passed"
+    },
+    {
+      "name": "owner_cannot_write_server_documents_or_read_internal_state",
+      "status": "passed"
+    },
+    {
+      "name": "storage_rejects_invalid_size_mime_filename_and_artwork_paths",
+      "status": "passed"
+    },
+    {
+      "name": "storage_owner_reads_test_file_but_cannot_overwrite_or_list",
+      "status": "passed"
+    },
+    {
+      "name": "signed_out_clients_cannot_read_firestore_or_storage",
+      "status": "passed"
+    },
+    {
+      "name": "other_uid_cannot_read_or_delete_existing_storage_object",
+      "status": "passed"
+    },
+    {
+      "name": "storage_owner_can_remove_the_test_object",
+      "status": "passed"
+    },
+    {
+      "name": "no_browser_errors_or_non_emulator_requests",
+      "status": "passed"
+    }
+  ],
+  "externalRequests": [],
+  "pageErrors": [],
+  "cleanupErrors": []
+}

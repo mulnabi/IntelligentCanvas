@@ -1,0 +1,13 @@
+{
+  "name": "intelligentcanvas-functions",
+  "private": true,
+  "version": "0.0.0",
+  "main": "src/index.js",
+  "engines": {
+    "node": "22"
+  },
+  "dependencies": {
+    "firebase-admin": "14.5.1",
+    "firebase-functions": "7.4.0"
+  }
+}

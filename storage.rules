@@ -1,0 +1,27 @@
+rules_version = '2';
+
+service firebase.storage {
+  match /b/{bucket}/o {
+    // 5-A 연결 확인용. 작품 파일과 임시 업로드 경로는 모두 차단한다.
+    match /_emulatorChecks/{uid}/{filename} {
+      function isTestOwner() {
+        return bucket == 'intelligentcanvas-stage5a-local.invalid'
+          && request.auth != null
+          && request.auth.uid == uid
+          && filename.matches('^[a-f0-9-]{36}[.]txt$');
+      }
+
+      allow create: if isTestOwner()
+        && resource == null
+        && request.resource.contentType == 'text/plain'
+        && request.resource.size > 0
+        && request.resource.size <= 256;
+      allow get, delete: if isTestOwner();
+      allow update, list: if false;
+    }
+
+    match /{path=**} {
+      allow read, write: if false;
+    }
+  }
+}
