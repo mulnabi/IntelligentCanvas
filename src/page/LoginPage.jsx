@@ -1,8 +1,10 @@
 import { useRef, useState } from 'react'
+import { useNavigate } from 'react-router'
 import { getAuthErrorMessage } from '../services/authService'
 import './Auth.css'
 
-function LoginPage({ onLogin, onSignup, authLoading = false, authError = '' }) {
+function LoginPage({ onLogin, authLoading = false, authError = '' }) {
+  const navigate = useNavigate()
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [error, setError] = useState('')
@@ -70,7 +72,7 @@ function LoginPage({ onLogin, onSignup, authLoading = false, authError = '' }) {
           </button>
           <button
             className="auth-button auth-button--secondary"
-            onClick={onSignup}
+            onClick={() => navigate('/signup', { state: { fromLogin: true } })}
             disabled={submitting}
             type="button"
           >

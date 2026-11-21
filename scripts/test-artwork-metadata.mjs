@@ -108,8 +108,9 @@ try {
 
   await check('signed_out_UI_and_all_repository_operations_denied', async () => {
     await page.goto(base)
-    await page.getByRole('link', { name: '로그인', exact: true }).waitFor()
-    assert.equal(await page.locator('.new-button').isDisabled(), true)
+    await page.waitForURL(`${base}/login`)
+    await page.locator('#login-email').waitFor()
+    assert.equal(await page.locator('.new-button').count(), 0)
     assert.equal(await page.locator('.artwork-card').count(), 0)
     const denied = await page.evaluate(async () => {
       const r = await import('/src/repositories/artworkRepository.js')
@@ -120,6 +121,25 @@ try {
       ].map(async fn => { try { await fn(); return 'ALLOWED' } catch (error) { return error.code } }))
     })
     assert.deepEqual(denied, Array(5).fill('artwork/auth-required'))
+  })
+  await check('login_signup_back_and_legacy_signup_routes', async () => {
+    const goBack = () => page.getByRole('button', { name: '로그인 화면으로 돌아가기' }).click()
+    await page.getByRole('button', { name: '회원가입', exact: true }).click()
+    await page.waitForURL(`${base}/signup`)
+    await goBack()
+    await page.waitForURL(`${base}/login`)
+    await page.goForward()
+    await page.waitForURL(`${base}/signup`)
+
+    const direct = await page.context().newPage()
+    try {
+      await direct.goto(`${base}/singup`)
+      await direct.waitForURL(`${base}/signup`)
+      await direct.getByRole('button', { name: '로그인 화면으로 돌아가기' }).click()
+      await direct.waitForURL(`${base}/login`)
+    } finally {
+      await direct.close()
+    }
   })
   await check('existing_signup_and_Firestore_profile_for_A', async () => {
     uidA = await signup(emails.a)
@@ -306,7 +326,8 @@ try {
   await check('logout_clears_list_without_deleting_local_data', async () => {
     await openActions('A1 수정')
     await logout()
-    await page.getByRole('link', { name: '로그인', exact: true }).waitFor()
+    await page.waitForURL(`${base}/login`)
+    await page.locator('#login-email').waitFor()
     assert.equal(await page.locator('.artwork-card').count(), 0)
     assert.equal(await page.getByRole('dialog').count(), 0)
     assert.equal((await rawRecord(uidA, a1.artworkId)).title, 'A1 수정')

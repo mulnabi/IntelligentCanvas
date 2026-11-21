@@ -1,4 +1,5 @@
 import { useRef, useState } from 'react'
+import { useLocation, useNavigate } from 'react-router'
 import { getAuthErrorMessage } from '../services/authService'
 import './Auth.css'
 
@@ -9,7 +10,9 @@ const initialValues = {
   confirmPassword: '',
 }
 
-function SignupPage({ onBack, onSignup, onRetryProfile, authLoading = false, authError = '', currentUid = null }) {
+function SignupPage({ onSignup, onRetryProfile, authLoading = false, authError = '', currentUid = null }) {
+  const navigate = useNavigate()
+  const { state } = useLocation()
   const [values, setValues] = useState(initialValues)
   const [error, setError] = useState('')
   const [submitting, setSubmitting] = useState(false)
@@ -56,6 +59,11 @@ function SignupPage({ onBack, onSignup, onRetryProfile, authLoading = false, aut
     }
   }
 
+  const handleBack = () => {
+    if (state?.fromLogin === true) navigate(-1)
+    else navigate('/login', { replace: true })
+  }
+
   return (
     <main className="auth-page">
       <section className="auth-card auth-card--signup">
@@ -63,7 +71,7 @@ function SignupPage({ onBack, onSignup, onRetryProfile, authLoading = false, aut
           <button
             aria-label="로그인 화면으로 돌아가기"
             className="auth-back"
-            onClick={onBack}
+            onClick={handleBack}
             disabled={submitting}
             type="button"
           >

@@ -128,7 +128,6 @@ function ArtworkList({ uid, authLoading = false, authError = '' }) {
     deleteRequests.current.delete(intent)
     setCatalog(current => current && { ...current, rows: current.rows.filter(row => row.artworkId !== artworkId) })
   }
-
   return (
     <div className="artwork-page">
       <div className="page-top">

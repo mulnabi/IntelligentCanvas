@@ -33,10 +33,11 @@ function AppRoutes() {
 
   return (
     <Routes>
-      <Route path="/" element={<ArtworkList key={user?.uid ?? 'signed-out'} uid={user?.uid ?? null} authLoading={loading} authError={error}/>} />
+      <Route path="/" element={!loading && !error && !user
+        ? <Navigate to="/login" replace />
+        : <ArtworkList key={user?.uid ?? 'signed-out'} uid={user?.uid ?? null} authLoading={loading} authError={error}/>} />
       <Route path="/singup" element={<Navigate to="/signup" replace />} />
       <Route path="/signup" element={<SignupPage
-        onBack={() => navigate('/login')}
         onSignup={handleSignup}
         onRetryProfile={handleRetryProfile}
         authLoading={loading}
@@ -45,7 +46,6 @@ function AppRoutes() {
       />} />
       <Route path="/login" element={<LoginPage
         onLogin={handleLogin}
-        onSignup={() => navigate('/signup')}
         authLoading={loading}
         authError={error}
       />} />
