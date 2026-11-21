@@ -14,6 +14,7 @@ const run = crypto.randomUUID()
 const email = `stage5d-${run}@example.test`
 const password = `Stage5d-${run}!`
 const users = []
+const catalogFixtures = []
 const title = '오프라인 통합 검증'
 let server, browser, uid, id, passed = 0
 
@@ -489,6 +490,126 @@ try {
       if (layer.pngPath.stringValue) await http(`${objects}/${encodeURIComponent(layer.pngPath.stringValue)}`, { headers: admin })
     }
   })
+
+  await check('server soft delete is versioned, protects local drafts and updates the other browser', async () => {
+    const version = (await call(b, 'getServerArtwork')).serverVersion
+    const olderProof = await proof(b)
+    const localOriginals = await pixelSignatures(a)
+    const draftId = (await local(a)).drafts[0]
+    const draftOriginals = await pixelSignatures(a, draftId)
+    const request = { expectedServerVersion: version, requestId: crypto.randomUUID() }
+    await assert.rejects(call(a, 'deleteServerArtwork', request), { code: 'functions/failed-precondition' })
+    await assert.rejects(call(outsider, 'deleteServerArtwork', request), { code: 'functions/not-found' })
+    const blocked = await a.evaluate(async ({ uid, id, request }) => {
+      try {
+        await (await import('/src/services/artworkSyncService.js')).deleteRegisteredArtwork(uid, id, request.expectedServerVersion, request.requestId)
+        return ''
+      } catch (error) { return error.message }
+    }, { uid, id, request })
+    assert.match(blocked, /미동기화 작업 또는 복구 초안/)
+    await button(b, '서버 저장 후 편집 종료').click()
+    await button(b, '편집 세션 받기').waitFor()
+    await assert.rejects(call(b, 'deleteServerArtwork', { ...request, expectedServerVersion: version - 1 }), { code: 'functions/failed-precondition' })
+    const committed = (await readDoc('')).layerManifest
+    await b.goto(base)
+    await button(b, `${title} 관리`).click()
+    b.once('dialog', dialog => dialog.accept())
+    await button(b, '삭제').click()
+    await b.getByText('서버에서 삭제된 작품의 로컬 보존본', { exact: true }).waitFor()
+    const tombstone = await readDoc('')
+    assert.equal(tombstone.state.stringValue, 'deleted')
+    assert.equal(Number(tombstone.serverVersion.integerValue), version + 1)
+    assert.ok(tombstone.deletedAt.timestampValue)
+    assert.deepEqual(tombstone.layerManifest, committed)
+    const requestId = tombstone.deletion.mapValue.fields.requestId.stringValue
+    assert.deepEqual(await call(b, 'deleteServerArtwork', { expectedServerVersion: version, requestId }),
+      { artworkId: id, serverVersion: version + 1 })
+    await assert.rejects(call(b, 'deleteServerArtwork', request), { code: 'functions/failed-precondition' })
+    await assert.rejects(call(b, 'finalizeArtworkSave', { proof: olderProof, requestId: stagedJob }), { code: 'functions/not-found' })
+    await assert.rejects(call(b, 'acquireEditSession', { deviceId: 'cannot-reopen' }), { code: 'functions/not-found' })
+    assert.equal(Number((await readDoc('')).serverVersion.integerValue), version + 1)
+    for (const row of committed.arrayValue.values) {
+      const pngPath = row.mapValue.fields.pngPath.stringValue
+      if (pngPath) await http(`${objects}/${encodeURIComponent(pngPath)}`, { headers: admin })
+    }
+    await a.goto(base)
+    await button(a, '서버 작품 보기').click()
+    const recoveryList = a.getByText('서버에서 삭제된 작품의 로컬 보존본', { exact: true })
+    await recoveryList.waitFor()
+    assert.equal(await button(a, `${title} 열기`).count(), 0)
+    await a.reload()
+    await recoveryList.click()
+    await a.getByRole('link', { name: title, exact: true }).click()
+    assert.equal(await canvas(a).getAttribute('data-read-only'), 'true')
+    assert.equal(await a.getByText('서버 동기화 완료', { exact: true }).count(), 0)
+    await a.getByText('이 브라우저의 복구 초안 (1)', { exact: true }).waitFor()
+    assert.deepEqual(await pixelSignatures(a), localOriginals)
+    assert.deepEqual(await pixelSignatures(a, draftId), draftOriginals)
+    assert.equal((await local(a)).job.state, 'quarantined')
+  })
+
+  await check('server catalog pages with tied timestamps, deduplicates cached works and isolates accounts', async () => {
+    const prefix = `page-${run}-`
+    const stamp = { timestampValue: '2025-01-01T00:00:00.000Z' }
+    const string = stringValue => ({ stringValue })
+    const ids = Array.from({ length: 45 }, (_, index) => `${prefix}${String(index).padStart(2, '0')}`)
+    const fixtures = [
+      ...ids.map((id, index) => [uid, id, `서버 페이지 ${String(index).padStart(2, '0')}`, 'active']),
+      [uid, prefix + 'hidden', '삭제 표식 픽스처', 'deleted'],
+      [users[1], prefix + 'foreign', '다른 UID 작품', 'active'],
+    ]
+    const writes = fixtures.map(([owner, id, name, state]) => {
+      const path = `users/${owner}/artworks/${id}`
+      catalogFixtures.push(path)
+      return { update: { name: `projects/${project}/databases/(default)/documents/${path}`, fields: {
+        ownerUid: string(owner), artworkId: string(id), title: string(name), state: string(state), publication: string('ready'),
+        widthPx: { integerValue: '8' }, heightPx: { integerValue: '8' }, backgroundColor: string('#ffffff'),
+        createdAt: stamp, updatedAt: stamp, serverVersion: { integerValue: '1' },
+      } } }
+    })
+    await http(`${docs}:commit`, { method: 'POST', headers: { ...admin, 'Content-Type': 'application/json' }, body: JSON.stringify({ writes }) })
+    await a.goto(base)
+    const cardSelector = `.artwork-card[data-artwork-id^="${prefix}"]`
+    const cards = a.locator(cardSelector)
+    const idsOnPage = () => cards.evaluateAll(items => items.map(item => item.dataset.artworkId))
+    const waitCount = async count => a.waitForFunction(({ cardSelector, count }) =>
+      document.querySelectorAll(cardSelector).length === count, { cardSelector, count })
+    // 로컬 캐시와 같은 ID는 서버 페이지와 합쳐 카드 하나만 표시한다.
+    await a.evaluate(async ({ uid, id }) => {
+      const { localDb } = await import('/src/db/localDb.js')
+      await localDb.artworks.add({ uid, artworkId: id, title: '로컬 캐시', titleNormalized: '로컬 캐시', width: 8, height: 8,
+        state: 'active', createdAt: 10, updatedAt: 10 })
+    }, { uid, id: ids[44] })
+    await button(a, '서버 작품 보기').click()
+    await waitCount(20)
+    const firstPage = await idsOnPage()
+    assert.deepEqual([...firstPage].sort(), ids.slice(-20))
+    await button(a, '서버 작품 더 보기').click()
+    await waitCount(40)
+    await button(a, '서버 작품 더 보기').click()
+    await waitCount(45)
+    assert.deepEqual((await idsOnPage()).sort(), ids)
+    await a.getByRole('textbox', { name: '작품 검색' }).fill('서버 페이지 00')
+    await waitCount(1)
+    await button(a, '서버 페이지 00 열기').waitFor()
+    await a.getByRole('textbox', { name: '작품 검색' }).fill('')
+    await a.getByRole('combobox', { name: '작품 정렬' }).selectOption('title')
+    await waitCount(21)
+    await a.reload()
+    await button(a, '서버 작품 보기').click()
+    await waitCount(20)
+    const foreign = await outsider.evaluate(async () => {
+      const { auth } = await import('/src/config/firebase.js')
+      return (await (await import('/src/services/artworkSyncService.js')).listServerArtworks(auth.currentUser.uid)).rows.map(row => row.artworkId)
+    })
+    assert.deepEqual(foreign, [prefix + 'foreign'])
+    await a.evaluate(async () => (await import('/src/services/authService.js')).logoutUser())
+    await a.getByRole('link', { name: '로그인', exact: true }).waitFor()
+    await account(a, `other-${email}`, false)
+    await button(a, '서버 작품 보기').click()
+    await waitCount(1)
+    assert.deepEqual(await idsOnPage(), [prefix + 'foreign'])
+  })
 } catch (error) {
   console.error(error)
   process.exitCode = 1
@@ -496,6 +617,7 @@ try {
   await browser?.close()
   await server?.close()
   try {
+    for (const path of catalogFixtures) await http(`${docs}/${path}`, { method: 'DELETE', headers: admin })
     if (uid && id) {
       const path = artworkPath()
       for (const child of ['layers', 'editSession', 'saveReceipts', 'revisions', 'sessionRecoveries']) {

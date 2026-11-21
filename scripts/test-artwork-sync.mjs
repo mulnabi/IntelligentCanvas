@@ -54,7 +54,7 @@ async function call(page, name, input = {}) {
       if (name === 'listServerArtworks') {
         const { listServerArtworks } = await import('/src/services/artworkSyncService.js')
         const { auth } = await import('/src/config/firebase.js')
-        return { result: await listServerArtworks(auth.currentUser.uid) }
+        return { result: (await listServerArtworks(auth.currentUser.uid, input)).rows }
       }
       const { callEditSession } = await import('/src/services/editSessionService.js')
       return { result: await callEditSession(name, id, input) }
@@ -452,6 +452,7 @@ try {
     assert.deepEqual(await signatures(a), pixels)
   })
 
+  let oversized
   await check('oversize raster keeps local PNG and frozen queue; Firestore version and receipt stay fixed', async () => {
     await b.getByRole('button', { name: '편집 세션 받기', exact: true }).click()
     await b.getByRole('button', { name: '수정 시작', exact: true }).click()
@@ -464,15 +465,17 @@ try {
     await assert.rejects(call(b, 'prepareArtworkSave', { proof: await proof(b), requestId: crypto.randomUUID(),
       expectedServerVersion: manifest.serverVersion, localVersion: (await local(b)).state.localVersion + 1,
       meta: { title, widthPx, heightPx, backgroundColor }, layers: invalidLayers }), { code: 'functions/invalid-argument' })
-    const { layerId, size } = await b.evaluate(async ({ uid, id, limit }) => {
+    const { layerId, size, hash } = await b.evaluate(async ({ uid, id, limit }) => {
       const { localDb } = await import('/src/db/localDb.js')
       const { saveLayerChanges } = await import('/src/repositories/layerRepository.js')
       const layers = await localDb.layers.where('[uid+artworkId]').equals([uid, id]).toArray()
-      const original = (await localDb.layerContents.where('[uid+artworkId]').equals([uid, id]).toArray())[0]
+      const visibleLayer = layers.find(layer => layer.visible)
+      const original = await localDb.layerContents.get([uid, id, visibleLayer.layerId])
       // 실제 PNG 헤더를 가진 크기 경계 픽스처. 서버로 전송하기 전에 차단되어야 한다.
       const pngBlob = new Blob([original.pngBlob, new Uint8Array(limit)], { type: 'image/png' })
       await saveLayerChanges(uid, id, { previousIds: layers.map(layer => layer.layerId), contents: [{ ...original, pngBlob }] })
-      return { layerId: original.layerId, size: pngBlob.size }
+      const digest = await crypto.subtle.digest('SHA-256', await pngBlob.arrayBuffer())
+      return { layerId: original.layerId, size: pngBlob.size, hash: new Uint8Array(digest).join('.') }
     }, { uid, id, limit })
     await b.getByText(/동기화 실패.*8 MiB/).waitFor()
     const state = await local(b)
@@ -487,6 +490,43 @@ try {
     }, { uid, id, layerId })
     assert.deepEqual(retainedSizes, [size, size])
     assert.equal((await fetch(`${docs}/users/${uid}/artworks/${id}/saveReceipts/${state.job.requestId}`, { headers: admin })).status, 404)
+    oversized = { layerId, size, hash, requestId: state.job.requestId }
+  })
+
+  await check('explicit retry archives the rejected PNG before sending the user-edited layer', async () => {
+    const retry = b.getByRole('button', { name: '레이어 수정 후 동기화 다시 시도', exact: true })
+    await retry.click()
+    await b.getByRole('alert').filter({ hasText: '8 MiB를 넘는 레이어를 수정' }).waitFor()
+    assert.equal((await local(b)).job.requestId, oversized.requestId)
+    const layerIndex = await b.evaluate(async ({ uid, id, layerId }) => {
+      const { localDb } = await import('/src/db/localDb.js')
+      return (await localDb.layers.get([uid, id, layerId])).sortOrder
+    }, { uid, id, layerId: oversized.layerId })
+    await b.getByRole('button', { name: '레이어 패널 열기' }).click()
+    await b.locator('.layer-select').nth(layerIndex).click()
+    await draw(b, 0.65)
+    await retry.click()
+    await waitForLocalReceipt(b, 7)
+    const { state } = await local(b)
+    assert.notEqual(state.receipt.requestId, oversized.requestId)
+    assert.equal((await remoteDocument()).serverVersion.integerValue, '7')
+    const preserved = await b.evaluate(async ({ uid, id, oversized }) => {
+      const { localDb } = await import('/src/db/localDb.js')
+      const drafts = await localDb.recoveryDrafts.where('[uid+artworkId]').equals([uid, id]).toArray()
+      const draft = drafts.find(row => row.reason === 'png_size')
+      const archived = draft.failedJob.contents.find(layer => layer.layerId === oversized.layerId).pngBlob
+      const digest = await crypto.subtle.digest('SHA-256', await archived.arrayBuffer())
+      return {
+        pending: draft.pendingRequestIds,
+        archivedSize: archived.size,
+        archivedHash: new Uint8Array(digest).join('.'),
+        newSize: (await localDb.layerContents.get([uid, id, oversized.layerId])).pngBlob.size,
+      }
+    }, { uid, id, oversized })
+    assert.deepEqual(preserved.pending, [oversized.requestId])
+    assert.equal(preserved.archivedSize, oversized.size)
+    assert.equal(preserved.archivedHash, oversized.hash)
+    assert.ok(preserved.newSize < 8 * 1024 * 1024)
   })
 } catch (error) {
   console.error(error)

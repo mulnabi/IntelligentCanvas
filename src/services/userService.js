@@ -1,4 +1,6 @@
-import { doc, getDocFromServer, runTransaction, serverTimestamp, updateDoc } from 'firebase/firestore'
+import { doc, runTransaction, serverTimestamp, updateDoc } from 'firebase/firestore'
+import { getSessionIdToken, waitForAuthSession, withAuthDeadline } from './authSession'
+import { readServerDocument } from './firestoreRead'
 
 export function normalizeNickname(value) {
   const nickname = typeof value === 'string' ? value.trim() : ''
@@ -12,27 +14,35 @@ export function normalizeNickname(value) {
 
 async function ownProfileReference(uid) {
   const { auth, db } = await import('../config/firebase.js')
-  await auth.authStateReady()
-  if (!uid || auth.currentUser?.uid !== uid) {
+  await waitForAuthSession(auth)
+  const user = auth.currentUser
+  const assertUser = () => {
+    if (uid && user?.uid === uid && auth.currentUser === user) return
     const error = new Error('현재 로그인한 계정의 프로필만 처리할 수 있습니다. 다시 로그인해 주세요.')
     error.code = 'profile/auth-changed'
     throw error
   }
-  return { db, reference: doc(db, 'users', uid) }
+  assertUser()
+  await getSessionIdToken(auth, user)
+  assertUser()
+  return { db, reference: doc(db, 'users', uid), assertUser }
 }
 
 export async function getUserProfile(uid) {
-  const { reference } = await ownProfileReference(uid)
-  const snapshot = await getDocFromServer(reference)
+  const { reference, assertUser } = await ownProfileReference(uid)
+  const snapshot = await readServerDocument(reference, 'profile/save-timeout')
+  assertUser()
   return snapshot.exists() ? snapshot.data() : null
 }
 
 // 가입 후 응답 유실·중복 호출에도 기존 nickname/createdAt을 덮어쓰지 않는다.
 export async function ensureUserProfile(uid, value) {
   const nickname = normalizeNickname(value)
-  const { db, reference } = await ownProfileReference(uid)
-  await runTransaction(db, async (transaction) => {
+  const { db, reference, assertUser } = await ownProfileReference(uid)
+  await withAuthDeadline(runTransaction(db, async (transaction) => {
+    assertUser()
     const snapshot = await transaction.get(reference)
+    assertUser()
     if (!snapshot.exists()) {
       transaction.set(reference, {
         uid,
@@ -42,13 +52,13 @@ export async function ensureUserProfile(uid, value) {
         schemaVersion: 1,
       })
     }
-  }, { maxAttempts: 3 })
+  }, { maxAttempts: 3 }), 'profile/save-timeout')
   return getUserProfile(uid)
 }
 
 export async function updateNickname(uid, value) {
   const nickname = normalizeNickname(value)
   const { reference } = await ownProfileReference(uid)
-  await updateDoc(reference, { nickname, updatedAt: serverTimestamp() })
+  await withAuthDeadline(updateDoc(reference, { nickname, updatedAt: serverTimestamp() }), 'profile/save-timeout')
   return getUserProfile(uid)
 }

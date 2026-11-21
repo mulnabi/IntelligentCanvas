@@ -21,6 +21,7 @@ function ArtworkEditor({ artwork, edit, serverSnapshot }) {
   const canvasApi = useRef(null)
   const [toolInfo, setToolInfo] = useState({tool: 'pen', color: '#000000'});
   const [inputError, setInputError] = useState('')
+  const [retryingSize, setRetryingSize] = useState(false)
   const persistence = useCanvasPersistence(artwork, canvasApi, serverSnapshot)
   const sync = useArtworkSync(artwork.uid, artwork.artworkId, edit.proof)
   const localWriting = ['pending', 'saving', 'error'].includes(persistence.status)
@@ -53,11 +54,21 @@ function ArtworkEditor({ artwork, edit, serverSnapshot }) {
           <button onClick={edit.begin} disabled={edit.busy}>수정 시작</button>{' '}
           <button onClick={edit.release} disabled={edit.busy}>변경 없이 세션 반납</button>
         </>}
-        {sync.state && !serverSnapshot && <>
+        {sync.state && !serverSnapshot && !sync.state.serverDeletedVersion && <>
           <p role="status">{sync.state.failure ? `${sync.state.failure.revoked ? '서버 동기화 중지' : '동기화 실패'} · ${sync.state.failure.message}`
             : sync.uploading ? '서버 업로드 중' : sync.pending || localWriting ? '서버 동기화 대기 중'
               : '서버 동기화 완료'}</p>
           {sync.state.failure && !sync.terminal && edit.proof && <button onClick={() => void sync.retry()}>동기화 다시 시도</button>}
+          {sync.oversize && edit.proof && <>
+            <p>8 MiB를 넘는 레이어를 수정해 로컬 저장을 마친 뒤 다시 시도해 주세요. 이전 요청은 복구 초안에 보존됩니다.</p>
+            <button disabled={!sync.online || retryingSize || edit.busy} onClick={async () => {
+              setInputError('')
+              setRetryingSize(true)
+              try { await sync.retryOversize() }
+              catch (error) { setInputError(error.message) }
+              finally { setRetryingSize(false) }
+            }}>레이어 수정 후 동기화 다시 시도</button>
+          </>}
           {edit.status === 'editing' && <>
             <button onClick={edit.finish} disabled={edit.busy || !sync.online || sync.terminal}>서버 저장 후 편집 종료</button>{' '}
             <button disabled={edit.busy || persistence.locked} onClick={() => {
@@ -69,7 +80,7 @@ function ArtworkEditor({ artwork, edit, serverSnapshot }) {
         {edit.status === 'editing' && !sync.state && <p>서버 동기화 확인 전까지 이 세션은 반납할 수 없습니다.</p>}
         {edit.message && <p role="status">{edit.message}</p>}
         {['occupied', 'unavailable'].includes(edit.status) && <button onClick={edit.refresh} disabled={edit.busy}>편집 권한 다시 확인</button>}
-        {(edit.status === 'revoked' || serverSnapshot) && <>
+        {(edit.status === 'revoked' || serverSnapshot || sync.state) && <>
           {!edit.busy && <RecoveryDrafts uid={artwork.uid} artworkId={artwork.artworkId} />}
           {edit.status === 'revoked' && edit.message.includes('다시 시도')
             && <button onClick={edit.refresh} disabled={edit.busy}>초안 보존 다시 시도</button>}

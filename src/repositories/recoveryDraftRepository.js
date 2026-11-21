@@ -58,7 +58,8 @@ export async function copyRecoveryDraft(uid, artworkId, draftId) {
   const scope = { uid, artworkId: copyId }
   await localDb.transaction('rw', localDb.artworks, localDb.layers, localDb.layerContents, async () => {
     assertUser(auth, uid)
-    await localDb.artworks.add({ ...artworkMetadataSnapshot, ...scope, title, titleNormalized: title.normalize('NFKC').toLowerCase(),
+    const { serverDeletedVersion: _deletedVersion, ...original } = artworkMetadataSnapshot
+    await localDb.artworks.add({ ...original, ...scope, title, titleNormalized: title.normalize('NFKC').toLowerCase(),
       createdAt: now, updatedAt: now, state: 'active', deletedAt: null })
     await localDb.layers.bulkAdd(layersSnapshot.map(layer => ({ ...layer, ...scope })))
     await localDb.layerContents.bulkAdd(layerContentsSnapshot.map(content => ({ ...content, ...scope })))

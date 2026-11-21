@@ -1,5 +1,7 @@
-import { doc, getDocFromServer } from 'firebase/firestore'
+import { doc } from 'firebase/firestore'
 import { httpsCallable } from 'firebase/functions'
+import { getSessionIdToken, waitForAuthSession } from './authSession'
+import { readServerDocument } from './firestoreRead'
 
 const openEditors = new Map()
 const grants = new Map()
@@ -37,24 +39,23 @@ export async function getArtworkKind(uid, artworkId) {
     throw readOnlyError()
   }
   const { auth, db } = await import('../config/firebase')
-  await auth.authStateReady()
-  if (auth.currentUser?.uid !== uid) throw readOnlyError()
-  let timer
-  try {
-    const timeout = new Promise((_, reject) => { timer = setTimeout(() => reject(offlineError()), 7000) })
-    const snapshot = await Promise.race([getDocFromServer(doc(db, 'users', uid, 'artworks', artworkId)), timeout])
-    if (auth.currentUser?.uid !== uid) throw readOnlyError()
-    if (snapshot.exists()) {
-      if (snapshot.get('ownerUid') !== uid || snapshot.get('state') === 'deleted') throw readOnlyError()
-      rememberRegistration(key, 'server')
-      return 'server'
-    }
-    // 한 번 서버에서 확인된 작품을 조회 실패나 누락으로 로컬 전용으로 바꾸지 않는다.
-    if (known === 'server' || registrations.get(key) === 'server'
-      || read('localStorage', `${key}:kind`) === 'server') throw readOnlyError()
-    rememberRegistration(key, 'local')
-    return 'local'
-  } finally { clearTimeout(timer) }
+  await waitForAuthSession(auth)
+  const user = auth.currentUser
+  if (user?.uid !== uid) throw readOnlyError()
+  await getSessionIdToken(auth, user)
+  if (auth.currentUser !== user) throw readOnlyError()
+  const snapshot = await readServerDocument(doc(db, 'users', uid, 'artworks', artworkId), 'sync/offline', 7000)
+  if (auth.currentUser !== user) throw readOnlyError()
+  if (snapshot.exists()) {
+    if (snapshot.get('ownerUid') !== uid || snapshot.get('state') === 'deleted') throw readOnlyError()
+    rememberRegistration(key, 'server')
+    return 'server'
+  }
+  // 한 번 서버에서 확인된 작품을 조회 실패나 누락으로 로컬 전용으로 바꾸지 않는다.
+  if (known === 'server' || registrations.get(key) === 'server'
+    || read('localStorage', `${key}:kind`) === 'server') throw readOnlyError()
+  rememberRegistration(key, 'local')
+  return 'local'
 }
 
 export function bindArtworkAccess(uid, artworkId) {
@@ -142,7 +143,12 @@ export function claimArtworkTab(uid, artworkId) {
 
 export async function callEditSession(name, artworkId, input = {}) {
   if (!navigator.onLine) throw offlineError()
-  const { functions } = await import('../config/firebaseServerEmulators')
+  const { auth } = await import('../config/firebase')
+  const { functions } = await import('../config/firebaseServices')
+  await waitForAuthSession(auth)
+  const user = auth.currentUser
+  if (user) await getSessionIdToken(auth, user)
+  if (auth.currentUser !== user) throw readOnlyError()
   return (await httpsCallable(functions, name, { timeout: name === 'finalizeArtworkSave' ? 60000 : 10000 })({ artworkId, ...input })).data
 }
 

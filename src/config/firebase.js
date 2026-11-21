@@ -1,89 +1,64 @@
 import { deleteApp, getApps, initializeApp } from 'firebase/app'
-import { browserLocalPersistence, connectAuthEmulator, initializeAuth, inMemoryPersistence } from 'firebase/auth'
+import { beforeAuthStateChanged, browserLocalPersistence, connectAuthEmulator, initializeAuth, inMemoryPersistence } from 'firebase/auth'
 import { connectFirestoreEmulator, getFirestore, terminate } from 'firebase/firestore'
+import { withCanvasSaved } from '../services/pendingCanvasChanges'
+import { firebaseEmulators, resolveFirebaseEnvironment } from './firebaseEnvironment'
 
-export const firebaseEmulators = Object.freeze({
-  auth: 'http://127.0.0.1:9099',
-  firestoreHost: '127.0.0.1',
-  firestorePort: 8080,
-  storagePort: 9199,
-  functionsPort: 5001,
-})
+export const firebaseEnvironment = resolveFirebaseEnvironment(import.meta.env, globalThis.location?.origin)
 
 function configurationError(message) {
   return new Error(`[Firebase 설정] ${message}`)
 }
 
-// 로컬 개발 단계에서는 운영 연결을 제공하지 않는다. 실패 시 운영으로 전환하지 않는다.
 export function assertEmulatorEnvironment() {
-  if (!import.meta.env.DEV) {
-    throw configurationError('현재 Firebase 모듈은 개발용 Emulator에서만 사용할 수 있습니다.')
-  }
-  if (import.meta.env.VITE_USE_FIREBASE_EMULATORS !== 'true') {
-    throw configurationError('.env.local에 VITE_USE_FIREBASE_EMULATORS=true를 설정하고 개발 서버를 재시작해 주세요.')
-  }
+  if (firebaseEnvironment.mode !== 'emulator') throw configurationError('이 기능은 로컬 Emulator 전용입니다.')
 }
-
-function readFirebaseConfig() {
-  const required = {
-    apiKey: 'VITE_FIREBASE_API_KEY',
-    authDomain: 'VITE_FIREBASE_AUTH_DOMAIN',
-    projectId: 'VITE_FIREBASE_PROJECT_ID',
-    appId: 'VITE_FIREBASE_APP_ID',
-  }
-  const config = {}
-  const missing = []
-  for (const [field, variable] of Object.entries(required)) {
-    const value = import.meta.env[variable]?.trim()
-    if (!value) missing.push(variable)
-    else config[field] = value
-  }
-  if (missing.length) {
-    throw configurationError(`누락된 환경변수: ${missing.join(', ')}. .env.local을 저장하고 개발 서버를 재시작해 주세요.`)
-  }
-  if (config.projectId !== 'ai-drawing-a9177') {
-    throw configurationError('VITE_FIREBASE_PROJECT_ID가 기존 프로젝트 ai-drawing-a9177과 일치해야 합니다.')
-  }
-  // 두 항목은 SDK 설정을 보존하기 위한 것으로, 해당 서비스를 초기화하지 않는다.
-  if (import.meta.env.VITE_FIREBASE_STORAGE_BUCKET?.trim()) {
-    config.storageBucket = import.meta.env.VITE_FIREBASE_STORAGE_BUCKET.trim()
-  }
-  if (import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID?.trim()) {
-    config.messagingSenderId = import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID.trim()
-  }
-  return config
-}
-
-assertEmulatorEnvironment()
-const firebaseConfig = readFirebaseConfig()
 
 // Vite HMR에서도 이미 연결한 인스턴스를 재사용한다.
 const clientsByName = import.meta.hot?.data.firebaseClients ?? new Map()
-if (import.meta.hot) import.meta.hot.data.firebaseClients = clientsByName
+if (import.meta.hot) {
+  const signature = JSON.stringify(firebaseEnvironment)
+  if (clientsByName.size && import.meta.hot.data.firebaseSignature !== signature) {
+    throw configurationError('Firebase 연결 설정이 변경되었습니다. 페이지를 새로고침해 주세요.')
+  }
+  import.meta.hot.data.firebaseClients = clientsByName
+  import.meta.hot.data.firebaseSignature = signature
+}
 
-export function createEmulatorClients(name = '[DEFAULT]') {
-  assertEmulatorEnvironment()
+function createClients(name) {
   if (clientsByName.has(name)) return clientsByName.get(name)
   // 이 모듈 밖에서 생성된 앱의 연결 대상은 신뢰하지 않는다.
   if (getApps().some((existing) => existing.name === name)) {
     throw configurationError('연결 대상을 확인할 수 없는 Firebase 앱이 있습니다. 페이지를 새로고침해 주세요.')
   }
 
-  const app = initializeApp(firebaseConfig, name)
+  const app = initializeApp(firebaseEnvironment.config, name)
   // 일반 앱만 로그인 상태를 유지한다. 별도 테스트 앱은 기존처럼 메모리에 격리한다.
   const auth = initializeAuth(app, {
     persistence: name === '[DEFAULT]' ? browserLocalPersistence : inMemoryPersistence,
   })
-  connectAuthEmulator(auth, firebaseEmulators.auth, { disableWarnings: true })
+  if (firebaseEnvironment.mode === 'emulator') connectAuthEmulator(auth, firebaseEmulators.auth, { disableWarnings: true })
+  if (name === '[DEFAULT]') {
+    // SDK가 만료된 세션을 직접 반납할 때도 현재 편집의 로컬 저장을 기다린다.
+    beforeAuthStateChanged(auth, nextUser => {
+      if (!nextUser && auth.currentUser) return withCanvasSaved(() => {})
+    })
+  }
   const db = getFirestore(app)
-  connectFirestoreEmulator(db, firebaseEmulators.firestoreHost, firebaseEmulators.firestorePort)
+  if (firebaseEnvironment.mode === 'emulator') connectFirestoreEmulator(db, firebaseEmulators.host, firebaseEmulators.firestorePort)
 
   const clients = { app, auth, db }
   clientsByName.set(name, clients)
   return clients
 }
 
+export function createEmulatorClients(name = '[DEFAULT]') {
+  assertEmulatorEnvironment()
+  return createClients(name)
+}
+
 export async function disposeEmulatorClients(clients) {
+  assertEmulatorEnvironment()
   const name = clients.app.name
   try {
     await terminate(clients.db)
@@ -93,7 +68,7 @@ export async function disposeEmulatorClients(clients) {
   }
 }
 
-const defaultClients = createEmulatorClients()
+const defaultClients = createClients('[DEFAULT]')
 export const app = defaultClients.app
 export const auth = defaultClients.auth
 export const db = defaultClients.db

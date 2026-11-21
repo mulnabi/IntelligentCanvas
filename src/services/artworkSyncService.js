@@ -2,29 +2,29 @@ import { httpsCallable } from 'firebase/functions'
 import { localDb } from '../db/localDb'
 import { getArtwork, scopedAuth, assertUser } from '../repositories/artworkRepository'
 import { validatePngHeader } from '../repositories/canvasRepository'
-import { acknowledgeSave, checkDownloadTarget, confirmRegistration, freezeNextSave, installServerArtwork,
-  readArtworkSync, requestRegistration, toServerMeta } from '../repositories/artworkSyncRepository'
+import { acknowledgeSave, cachedServerArtworkIds, checkDownloadTarget, checkServerDeleteTarget, confirmRegistration,
+  freezeNextSave, installServerArtwork, readArtworkSync, rememberServerDeletions, replaceOversizeJob,
+  requestRegistration, SERVER_PNG_LIMIT, toServerMeta } from '../repositories/artworkSyncRepository'
 import { callEditSession, canSyncOpenArtwork, EDIT_SESSION_INVALIDATED, isConnectionFailure, rememberServerArtwork } from './editSessionService'
+import { getSessionIdToken } from './authSession'
 
 const active = new Map()
-const maxPngBytes = 8 * 1024 * 1024
 const error = (code, message) => Object.assign(new Error(message), { code })
 const conflict = () => error('sync/conflict', '서버 버전 또는 편집 권한이 변경되었습니다. 로컬 그림을 보존했습니다.')
 
 async function digest(blob) {
-  if (blob.size > maxPngBytes) throw error('sync/size', '서버에 올릴 레이어 PNG는 각각 8 MiB 이하여야 합니다.')
+  if (blob.size > SERVER_PNG_LIMIT) throw error('sync/size', '서버에 올릴 레이어 PNG는 각각 8 MiB 이하여야 합니다.')
   const bytes = await crypto.subtle.digest('SHA-256', await blob.arrayBuffer())
   return Array.from(new Uint8Array(bytes), byte => byte.toString(16).padStart(2, '0')).join('')
 }
 
 async function binary(name, uid, query, body, proof, signal) {
   const auth = await scopedAuth(uid)
-  const { app, firebaseEmulators } = await import('../config/firebase')
-  const { functionsRegion } = await import('../config/firebaseServerEmulators')
-  const token = await auth.currentUser.getIdToken()
+  const { artworkFunctionUrl } = await import('../config/firebaseServices')
+  const token = await getSessionIdToken(auth, auth.currentUser)
   assertUser(auth, uid)
   if (proof && !canSyncOpenArtwork(uid, query.artworkId)) throw conflict()
-  const endpoint = new URL(`http://127.0.0.1:${firebaseEmulators.functionsPort}/${app.options.projectId}/${functionsRegion}/${name}`)
+  const endpoint = artworkFunctionUrl(name)
   endpoint.search = new URLSearchParams(query)
   const headers = { Authorization: `Bearer ${token}` }
   if (body) Object.assign(headers, { 'Content-Type': 'image/png', 'X-Edit-Proof': JSON.stringify(proof) })
@@ -67,6 +67,9 @@ async function sendJob(uid, artworkId, proof, job, auth) {
   const layers = []
   for (const { layerId, name, opacity, visible, isTemporary, category } of job.layers) {
     const png = copies.get(layerId)
+    if (png?.size > SERVER_PNG_LIMIT) {
+      throw error('sync/size', `“${name}” 레이어 PNG가 8 MiB 한도를 초과했습니다. 이 브라우저에 원본을 보존했습니다.`)
+    }
     layers.push({ layerId, name, opacity, visible, isTemporary, category,
       image: png ? { hash: await digest(png), size: png.size } : null })
   }
@@ -97,12 +100,14 @@ export function syncArtwork(uid, artworkId, proof) {
   const work = async () => {
     const auth = await scopedAuth(uid)
     if (!navigator.onLine) throw error('sync/offline', '온라인에서 서버 동기화를 다시 시도해 주세요.')
+    let attemptedJob
     try {
       while (canSyncOpenArtwork(uid, artworkId)) {
         const state = await readArtworkSync(uid, artworkId)
         if (!state || state.failure?.terminal) return
         const job = await freezeNextSave(uid, artworkId, proof)
         if (!job) return
+        attemptedJob = job
         assertUser(auth, uid)
         const receipt = await sendJob(uid, artworkId, proof, job, auth)
         assertUser(auth, uid)
@@ -121,10 +126,11 @@ export function syncArtwork(uid, artworkId, proof) {
       const message = terminal ? cause.message : '서버 저장을 확인하지 못했습니다. 로컬 저장본을 보존했습니다.'
       await localDb.transaction('rw', localDb.artworkSync, async () => {
         const state = await readArtworkSync(uid, artworkId)
-        if (!state?.failure?.revoked) {
+        if (!state?.failure?.revoked && !state?.serverDeletedVersion) {
           const connection = isConnectionFailure(cause)
           const attempts = connection ? (state.failure?.attempts ?? 0) + 1 : 0
-          await localDb.artworkSync.update([uid, artworkId], { failure: { terminal, message, connection, attempts } })
+          const size = cause.code === 'sync/size' && attemptedJob ? { code: cause.code, requestId: attemptedJob.requestId } : {}
+          await localDb.artworkSync.update([uid, artworkId], { failure: { terminal, message, connection, attempts, ...size } })
         }
       })
       throw cause
@@ -135,12 +141,55 @@ export function syncArtwork(uid, artworkId, proof) {
   return running
 }
 
-export async function listServerArtworks(uid) {
+export async function retryOversizeArtwork(uid, artworkId, proof) {
   const auth = await scopedAuth(uid)
-  const { functions } = await import('../config/firebaseServerEmulators')
-  const { data } = await httpsCallable(functions, 'listServerArtworks', { timeout: 10000 })({})
+  const status = await callEditSession('getEditSessionStatus', artworkId, { proof, details: true })
+  if (status.status !== 'held' || status.openRequestId !== null || !canSyncOpenArtwork(uid, artworkId)) throw conflict()
+  await replaceOversizeJob(uid, artworkId, proof, status.serverVersion, () => {
+    assertUser(auth, uid)
+    if (!canSyncOpenArtwork(uid, artworkId)) throw conflict()
+  })
+}
+
+export async function listServerArtworks(uid, { sort = 'updatedAt', cursor = null } = {}) {
+  const auth = await scopedAuth(uid)
+  await getSessionIdToken(auth, auth.currentUser)
+  assertUser(auth, uid)
+  const { functions } = await import('../config/firebaseServices')
+  const { data } = await httpsCallable(functions, 'listServerArtworks', { timeout: 10000 })({ sort, cursor })
   assertUser(auth, uid)
   return data
+}
+
+export async function refreshServerDeletions(uid, visibleIds = [], includeCached = true) {
+  const auth = await scopedAuth(uid)
+  const cached = includeCached ? await cachedServerArtworkIds(uid) : []
+  const ids = [...new Set([...cached, ...visibleIds])]
+  if (!ids.length || !navigator.onLine) return []
+  assertUser(auth, uid)
+  await getSessionIdToken(auth, auth.currentUser)
+  const { functions } = await import('../config/firebaseServices')
+  const getDeleted = httpsCallable(functions, 'getDeletedServerArtworks', { timeout: 10000 })
+  const deleted = []
+  for (let offset = 0; offset < ids.length; offset += 40) {
+    assertUser(auth, uid)
+    const { data } = await getDeleted({ artworkIds: ids.slice(offset, offset + 40) })
+    await rememberServerDeletions(uid, data, () => assertUser(auth, uid))
+    deleted.push(...data.map(row => row.artworkId))
+  }
+  return deleted
+}
+
+export async function deleteRegisteredArtwork(uid, artworkId, expectedServerVersion, requestId) {
+  const auth = await scopedAuth(uid)
+  try {
+    await checkServerDeleteTarget(uid, artworkId)
+    assertUser(auth, uid)
+    const marker = await callEditSession('deleteServerArtwork', artworkId, { expectedServerVersion, requestId })
+    await rememberServerDeletions(uid, [marker], () => assertUser(auth, uid))
+  } catch (cause) {
+    throw error('artwork/server-delete', cause.message || '서버 작품을 삭제하지 못했습니다.')
+  }
 }
 
 async function getConfirmedArtwork(auth, uid, artworkId) {

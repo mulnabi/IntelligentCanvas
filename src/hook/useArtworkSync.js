@@ -1,8 +1,9 @@
 import { useEffect, useState } from 'react'
 import { useLiveQuery } from 'dexie-react-hooks'
 import { localDb } from '../db/localDb'
-import { readArtworkSync } from '../repositories/artworkSyncRepository'
-import { syncArtwork } from '../services/artworkSyncService'
+import { isOversizeFailure, readArtworkSync } from '../repositories/artworkSyncRepository'
+import { retryOversizeArtwork, syncArtwork } from '../services/artworkSyncService'
+import { withCanvasSaved } from '../services/pendingCanvasChanges'
 
 export function useArtworkSync(uid, artworkId, proof) {
   const [uploading, setUploading] = useState(false)
@@ -10,7 +11,7 @@ export function useArtworkSync(uid, artworkId, proof) {
   const [online, setOnline] = useState(() => navigator.onLine)
   const state = useLiveQuery(() => readArtworkSync(uid, artworkId), [uid, artworkId])
   const pending = state && state.localVersion !== state.ackLocalVersion
-  const terminal = state?.failure?.terminal === true
+  const terminal = state?.failure?.terminal === true || Boolean(state?.serverDeletedVersion)
   const failures = state?.failure?.attempts ?? 0
   const revision = state?.localVersion
   useEffect(() => {
@@ -45,6 +46,8 @@ export function useArtworkSync(uid, artworkId, proof) {
     return () => { active = false; clearTimeout(timer) }
   }, [uid, artworkId, proof, online, pending, terminal, failures, revision, attempt])
   return { state, pending, uploading: uploading && online && pending && !state?.failure, online, terminal,
+    oversize: isOversizeFailure(state?.failure),
+    retryOversize: () => withCanvasSaved(() => retryOversizeArtwork(uid, artworkId, proof)),
     retry: async () => {
       if (terminal) return
       await localDb.artworkSync.update([uid, artworkId], { failure: null })

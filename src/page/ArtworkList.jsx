@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Link, useNavigate } from 'react-router'
 
 import ArtworkCard from '../components/ArtworkList/ArtworkCard'
@@ -7,7 +7,7 @@ import ArtworkActions from '../components/ArtworkList/ArtworkActions'
 import { useArtworks } from '../hook/useArtworks'
 import { createArtwork, renameArtwork, deleteArtwork } from '../repositories/artworkRepository'
 import { readArtworkSync } from '../repositories/artworkSyncRepository'
-import { downloadServerArtwork, listServerArtworks } from '../services/artworkSyncService'
+import { deleteRegisteredArtwork, downloadServerArtwork, listServerArtworks, refreshServerDeletions } from '../services/artworkSyncService'
 import './ArtworkList.css'
 
 function ArtworkList({ uid, authLoading = false, authError = '' }) {
@@ -20,9 +20,14 @@ function ArtworkList({ uid, authLoading = false, authError = '' }) {
   const { artworks, loading, error, retry } = useArtworks(uid, catalog?.uid === uid ? '' : search, sort)
   const [remoteBusy, setRemoteBusy] = useState(false)
   const [remoteError, setRemoteError] = useState('')
+  const deleteRequests = useRef(new Map())
   const remote = catalog?.uid === uid ? catalog.rows : []
   const visible = new Map(remote.map(row => [row.artworkId, { ...row, width: row.widthPx, height: row.heightPx, remoteOnly: true }]))
   for (const item of artworks) {
+    if (item.serverDeletedVersion) {
+      visible.delete(item.artworkId)
+      continue
+    }
     const confirmed = visible.get(item.artworkId)
     // 서버 목록의 표시 정보는 확정본을 따르며, 로컬 작업본은 열기 단계의 보호 로직에 맡긴다.
     visible.set(item.artworkId, confirmed ? { ...item, ...confirmed, remoteOnly: false } : item)
@@ -32,17 +37,48 @@ function ArtworkList({ uid, authLoading = false, authError = '' }) {
     .sort((a, b) => (sort === 'title' ? a.title.localeCompare(b.title, 'ko') : b[sort] - a[sort]) || a.artworkId.localeCompare(b.artworkId))
   const canUse = !!uid && !authLoading && !authError
 
+  useEffect(() => {
+    if (!canUse) return
+    let active = true
+    const reconcile = () => {
+      void refreshServerDeletions(uid, catalog?.rows.map(row => row.artworkId)).then(ids => {
+        if (!active || !ids.length) return
+        setCatalog(current => {
+          const rows = current?.rows.filter(row => !ids.includes(row.artworkId))
+          return rows && rows.length !== current.rows.length ? { ...current, rows } : current
+        })
+      }).catch(() => {})
+    }
+    reconcile()
+    window.addEventListener('online', reconcile)
+    window.addEventListener('focus', reconcile)
+    return () => {
+      active = false
+      window.removeEventListener('online', reconcile)
+      window.removeEventListener('focus', reconcile)
+    }
+  }, [uid, canUse, catalog])
+
   const handleNew = async values => {
     const artwork = await createArtwork(uid, values)
     setSearch('')
-    setSort('updatedAt')
+    if (!catalog) setSort('updatedAt')
     return artwork // 생성 후 목록에 표시하고 카드를 선택하면 ID가 포함된 경로로 이동한다.
   }
 
-  const refreshRemote = async () => {
+  const refreshRemote = async (order = sort, cursor = null) => {
     setRemoteBusy(true)
     setRemoteError('')
-    try { setCatalog({ uid, rows: await listServerArtworks(uid) }) }
+    try {
+      const deleted = new Set(await refreshServerDeletions(uid, remote.map(row => row.artworkId)))
+      const page = await listServerArtworks(uid, { sort: order, cursor })
+      setCatalog(current => {
+        const previous = cursor ? current?.rows ?? [] : []
+        const rows = new Map([...previous, ...page.rows].map(row => [row.artworkId, row]))
+        for (const id of deleted) rows.delete(id)
+        return { uid, rows: [...rows.values()], nextCursor: page.nextCursor }
+      })
+    }
     catch { setRemoteError('서버 작품 목록을 불러오지 못했습니다. 이 브라우저의 작품은 유지됩니다.') }
     finally { setRemoteBusy(false) }
   }
@@ -56,6 +92,12 @@ function ArtworkList({ uid, authLoading = false, authError = '' }) {
     setRemoteError('')
     try {
       const state = item.remoteOnly ? null : await readArtworkSync(uid, artworkId)
+      if ((fromServerList || state?.serverVersion > 0) && navigator.onLine
+        && (await refreshServerDeletions(uid, [artworkId], false)).includes(artworkId)) {
+        setCatalog(current => current && { ...current, rows: current.rows.filter(row => row.artworkId !== artworkId) })
+        setRemoteError('서버에서 삭제된 작품입니다.')
+        return
+      }
       // 목록 조회 응답과 관계없이 확정본이 있는 깨끗한 캐시는 열기 전에 서버를 확인한다.
       const cleanCache = state?.serverVersion > 0 && state.localVersion === state.ackLocalVersion && !state.failure?.revoked
       if (fromServerList && !item.remoteOnly && !cleanCache) {
@@ -75,6 +117,18 @@ function ArtworkList({ uid, authLoading = false, authError = '' }) {
     navigate(drawing)
   }
 
+  const handleDelete = async artworkId => {
+    const state = await readArtworkSync(uid, artworkId)
+    if (!state && selected.serverVersion == null) return deleteArtwork(uid, artworkId)
+    const version = selected.serverVersion ?? state?.serverVersion
+    const intent = JSON.stringify([artworkId, version])
+    const requestId = deleteRequests.current.get(intent) ?? crypto.randomUUID()
+    deleteRequests.current.set(intent, requestId)
+    await deleteRegisteredArtwork(uid, artworkId, version, requestId)
+    deleteRequests.current.delete(intent)
+    setCatalog(current => current && { ...current, rows: current.rows.filter(row => row.artworkId !== artworkId) })
+  }
+
   return (
     <div className="artwork-page">
       <div className="page-top">
@@ -91,13 +145,21 @@ function ArtworkList({ uid, authLoading = false, authError = '' }) {
           value={search}
           onChange={(e) => setSearch(e.target.value)}
         />
-        <select aria-label="작품 정렬" value={sort} onChange={event => setSort(event.target.value)} disabled={!canUse}>
+        <select aria-label="작품 정렬" value={sort} disabled={!canUse || remoteBusy} onChange={event => {
+          const order = event.target.value
+          setSort(order)
+          if (catalog) void refreshRemote(order)
+        }}>
           <option value="updatedAt">최근 수정순</option>
           <option value="createdAt">최근 생성순</option>
           <option value="title">이름순</option>
         </select>
       </div>
       {canUse && <button disabled={remoteBusy} onClick={() => void refreshRemote()}>서버 작품 보기</button>}
+      {canUse && catalog?.nextCursor?.sort === sort && <>
+        {' '}<button disabled={remoteBusy} onClick={() => void refreshRemote(sort, catalog.nextCursor)}>서버 작품 더 보기</button>
+        <p>제목 검색은 로컬 작품과 현재까지 불러온 서버 작품에 적용됩니다.</p>
+      </>}
       {remoteError && <p role="alert">{remoteError}</p>}
 
       {authLoading ? <p className="no-result" role="status">로그인 상태 확인 중…</p>
@@ -111,12 +173,18 @@ function ArtworkList({ uid, authLoading = false, authError = '' }) {
         <div className="artwork-grid">
           {items.map((item) => (
             <ArtworkCard key={item.artworkId} artwork={item} onClick={handleOpen} disabled={remoteBusy}
-              onMore={item.remoteOnly ? undefined : setSelected}/>
+              onMore={setSelected}/>
           ))}
         </div>
       )}
+      {canUse && artworks.some(item => item.serverDeletedVersion) && <details>
+        <summary>서버에서 삭제된 작품의 로컬 보존본</summary>
+        <ul>{artworks.filter(item => item.serverDeletedVersion).map(item => <li key={item.artworkId}>
+          <Link to={`/drawing/${encodeURIComponent(item.artworkId)}`}>{item.title}</Link>
+        </li>)}</ul>
+      </details>}
       {canUse && selected && <ArtworkActions key={selected.artworkId} artwork={selected}
-        onRename={(id, title) => renameArtwork(uid, id, title)} onDelete={id => deleteArtwork(uid, id)} onClose={() => setSelected(null)}/>}
+        onRename={(id, title) => renameArtwork(uid, id, title)} onDelete={handleDelete} onClose={() => setSelected(null)}/>}
     </div>
   )
 }

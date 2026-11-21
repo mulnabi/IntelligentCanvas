@@ -1,5 +1,5 @@
 const { randomUUID } = require('node:crypto')
-const { FieldValue } = require('firebase-admin/firestore')
+const { FieldPath, FieldValue, Timestamp } = require('firebase-admin/firestore')
 const { getAuth } = require('firebase-admin/auth')
 const { getStorage } = require('firebase-admin/storage')
 const { HttpsError } = require('firebase-functions/v2/https')
@@ -201,6 +201,43 @@ const getServerArtwork = requireCallable([], async (uid, { artworkId }) => {
   return { ...publicArtwork(data), layers: data.layerManifest.map(({ pngPath: _path, ...layer }) => layer) }
 })
 
+const deleteServerArtwork = requireCallable(['requestId', 'expectedServerVersion'], (uid, { artworkId, requestId, expectedServerVersion }) => {
+  if (!validId(requestId) || !integer(expectedServerVersion, 1)) throw invalid('삭제 요청과 작품 버전을 확인해 주세요.')
+  const ref = artworkRef(uid, artworkId)
+  return ref.firestore.runTransaction(async tx => {
+    const data = (await tx.get(ref)).data()
+    if (data?.ownerUid !== uid || data.publication !== 'ready') throw missing()
+    const result = { artworkId, serverVersion: expectedServerVersion + 1 }
+    if (data.state === 'deleted') {
+      if (data.deletion?.requestId === requestId && data.serverVersion === result.serverVersion) return result
+      throw conflict()
+    }
+    if (data.state !== 'active' || data.serverVersion !== expectedServerVersion
+      || !integer(result.serverVersion, 2)) throw conflict()
+    const session = await tx.get(ref.collection('editSession').doc('current'))
+    if (session.exists && (session.get('status') !== 'released' || session.get('localChangesPending') || session.get('openRequestId'))) {
+      throw new HttpsError('failed-precondition', '서버 저장을 마치고 편집 세션을 반납한 뒤 삭제해 주세요.')
+    }
+    const now = FieldValue.serverTimestamp()
+    tx.update(ref, { state: 'deleted', deletedAt: now, updatedAt: now, serverVersion: result.serverVersion,
+      deletion: { requestId } })
+    return result
+  })
+})
+
+async function getDeletedServerArtworks(request) {
+  const uid = request.auth?.uid
+  if (!uid) throw new HttpsError('unauthenticated', '로그인이 필요합니다.')
+  const ids = request.data?.artworkIds
+  if (!Array.isArray(ids) || !ids.length || ids.length > 40 || !ids.every(validId)) {
+    throw invalid('삭제 상태를 확인할 작품을 지정해 주세요.')
+  }
+  const snapshots = await getLocalFirestore().getAll(...[...new Set(ids)].map(id => artworkRef(uid, id)),
+    { fieldMask: ['ownerUid', 'state', 'serverVersion'] })
+  return snapshots.filter(row => row.get('ownerUid') === uid && row.get('state') === 'deleted')
+    .map(row => ({ artworkId: row.id, serverVersion: row.get('serverVersion') }))
+}
+
 const listArtworkRevisions = requireCallable([], async (uid, { artworkId }) => {
   await getReady(uid, artworkId)
   const recent = await artworkRef(uid, artworkId).collection('revisions').orderBy('serverVersion', 'desc').limit(30).get()
@@ -247,9 +284,36 @@ const cleanupArtworkStaging = requireCallable(['requestId', 'execute'], async (u
 async function listServerArtworks(request) {
   const uid = request.auth?.uid
   if (!uid) throw new HttpsError('unauthenticated', '로그인이 필요합니다.')
-  const snap = await getLocalFirestore().collection('users').doc(uid).collection('artworks')
-    .where('publication', '==', 'ready').get()
-  return snap.docs.map(doc => doc.data()).filter(data => data.ownerUid === uid && data.state !== 'deleted').map(publicArtwork)
+  const { sort = 'updatedAt', cursor = null } = request.data ?? {}
+  if (!['updatedAt', 'createdAt', 'title'].includes(sort)) throw invalid('서버 작품 정렬을 확인해 주세요.')
+  const direction = sort === 'title' ? 'asc' : 'desc'
+  let query = getLocalFirestore().collection('users').doc(uid).collection('artworks')
+    .where('ownerUid', '==', uid).where('state', '==', 'active').where('publication', '==', 'ready')
+    .orderBy(sort, direction).orderBy(FieldPath.documentId(), direction)
+  if (cursor !== null) {
+    if (!cursor || cursor.sort !== sort || cursor.uid !== uid || !validId(cursor.id)) throw invalid('목록 위치를 확인해 주세요.')
+    let value = cursor.value
+    if (sort === 'title') {
+      if (typeof value !== 'string' || value.length > 200) throw invalid('목록 위치를 확인해 주세요.')
+    } else {
+      if (!Number.isSafeInteger(value?.seconds) || !integer(value?.nanoseconds, 0, 999_999_999)
+        || value.seconds < -62_135_596_800 || value.seconds > 253_402_300_799) throw invalid('목록 시각을 확인해 주세요.')
+      value = new Timestamp(value.seconds, value.nanoseconds)
+    }
+    query = query.startAfter(value, cursor.id)
+  }
+  const pageSize = 20
+  const snap = await query.select('artworkId', 'title', 'widthPx', 'heightPx', 'backgroundColor',
+    'serverVersion', 'createdAt', 'updatedAt').limit(pageSize + 1).get()
+  const page = snap.docs.slice(0, pageSize)
+  let nextCursor = null
+  if (snap.size > pageSize) {
+    const last = page.at(-1)
+    const value = last.get(sort)
+    nextCursor = { uid, sort, id: last.id,
+      value: sort === 'title' ? value : { seconds: value.seconds, nanoseconds: value.nanoseconds } }
+  }
+  return { rows: page.map(doc => publicArtwork(doc.data())), nextCursor }
 }
 
 function binary(method, operation) {
@@ -288,5 +352,6 @@ const downloadArtworkPng = binary('GET', async (uid, req, res) => {
 })
 
 module.exports = { createServerArtwork, prepareArtworkSave, finalizeArtworkSave, listServerArtworks, getServerArtwork,
+  deleteServerArtwork, getDeletedServerArtworks,
   listArtworkRevisions, cleanupArtworkStaging,
   uploadArtworkPng, downloadArtworkPng }

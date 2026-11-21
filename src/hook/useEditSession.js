@@ -77,6 +77,12 @@ export function useEditSession(uid, artworkId, snapshotOnly = false) {
       if (revocation) return preserveInvalidated(revocation)
       const state = await readArtworkSync(uid, artworkId)
       if (disposed) return
+      if (state?.serverDeletedVersion) {
+        if (!state.failure?.revoked && state.sessionId && state.localVersion !== state.ackLocalVersion) {
+          return preserveInvalidated(state)
+        }
+        return publish('revoked', '서버에서 삭제된 작품입니다. 이 브라우저의 보존본을 읽기 전용으로 표시합니다.')
+      }
       if (state?.failure?.revoked) return publish('revoked', RECOVERY_MESSAGE)
       const stored = snapshotOnly ? null : readTabGrant(uid, artworkId)
       proof = stored && await takeLock() ? stored : null

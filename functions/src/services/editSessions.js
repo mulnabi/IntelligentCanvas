@@ -65,7 +65,7 @@ const getEditSessionStatus = callable(['proof', 'details'], (uid, { artworkId, p
     const response = held ? { status: 'held', localChangesPending: session.localChangesPending === true }
       : { status: active ? 'occupied' : 'available' }
     if (details !== true) return response
-    return { ...response, serverVersion: data.serverVersion ?? null,
+    return { ...response, ...(held ? { openRequestId: session.openRequestId ?? null } : {}), serverVersion: data.serverVersion ?? null,
       generation: session?.generation ?? 0, sessionRef: active ? sessionRef(session) : null,
       canRecover: active && !held && data.publication === 'ready' }
   }))
