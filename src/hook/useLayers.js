@@ -1,9 +1,14 @@
 import { useState } from 'react'
 
 // 레이어 목록 관리 
-export function useLayers(initialLayers) {
-  const [layers, setLayers] = useState(initialLayers)
-  const [activeId, setActiveId] = useState(initialLayers[0].layerId)
+export function useLayers(w,h,layerList) {
+  const [size] = useState({ w, h })
+  const [layers, setLayers] = useState(() => layerList.map(layer => ({
+    ...layer,
+    data: new OffscreenCanvas(size.w, size.h).getContext('2d')
+  })))
+  const [activeId, setActiveId] = useState(layerList[0].layerId)
+  const [update, setUpdate] = useState(true)
 
   const select = id => setActiveId(id)
 
@@ -25,6 +30,7 @@ export function useLayers(initialLayers) {
       visible: true,
       isTemporary: false,
       category: null,
+      data:new OffscreenCanvas(size.w,size.h).getContext('2d')
     }
     const i = layers.findIndex(l => l.layerId === activeId)
     const next = [...layers]
@@ -39,6 +45,7 @@ export function useLayers(initialLayers) {
     setLayers(next)
     if (id === activeId) setActiveId(next[Math.min(i, next.length - 1)].layerId)
   }
+  const getLayer = (id=activeId) =>layers.find(l => l.layerId === id)
 
   // id 레이어를 to번째 자리로 이동
   const move = (id, to) => {
@@ -50,5 +57,5 @@ export function useLayers(initialLayers) {
     setLayers(next)
   }
 
-  return { layers, activeId, select, toggle, setOpacity, add, remove, move }
+  return {size, layers, activeId, select, toggle, setOpacity, add, remove, getLayer, move, setUpdate }
 }

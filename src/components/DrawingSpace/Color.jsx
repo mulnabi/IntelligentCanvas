@@ -1,5 +1,5 @@
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import './Color.css'
 
 import { Blind } from '../mainComponents'
@@ -48,16 +48,22 @@ function Color({ color, onChange }) {
   // ------ 추가-2 : 색상 상태 ------
   const [hsv, setHsv] = useState(() => hexToHsv(color))
   const [recent, setRecent] = useState([color || '#ff0000'])
+  const lastEmittedColor = useRef(null)
 
   useEffect(() => {
+    // 자체 변경을 HEX에서 다시 변환하면 회색과 검정에서 색상각이 사라진다.
+    if (color === lastEmittedColor.current) return
+    lastEmittedColor.current = null
     setHsv(hexToHsv(color))
   }, [color])
 
   const selectedColor = hsvToHex(hsv)
 
   function changeColor(next) {
+    const hex = hsvToHex(next)
     setHsv(next)
-    onChange?.(hsvToHex(next))
+    lastEmittedColor.current = hex
+    onChange?.(hex)
   }
 
   function changeHue(e) {
@@ -127,6 +133,7 @@ function Color({ color, onChange }) {
               changeSV(e)
             }}
             onPointerMove={(e) => {
+              e.stopPropagation()
               if (e.currentTarget.hasPointerCapture(e.pointerId)) changeSV(e)
             }}
           >
