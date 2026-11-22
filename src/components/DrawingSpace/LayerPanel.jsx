@@ -1,4 +1,4 @@
-import { useState, useRef, useLayoutEffect } from 'react'
+import { useLayoutEffect, useState, useRef } from 'react'
 import './LayerPanel.css'
 
 const ROW_H = 56 // 줄 높이 52 + 간격 4
@@ -15,25 +15,26 @@ const Icon = ({ name }) => (
   <svg viewBox="0 0 32 32"><path d={icons[name]} /></svg>
 )
 
-function LayerThumbnail({ layerId, pixelRevision, getLayerPreview }) {
+function LayerThumbnail({ layerId, revision, getLayerPreview }) {
   const thumbnail = useRef(null)
   useLayoutEffect(() => {
-    const canvas = thumbnail.current
-    const ctx = canvas.getContext('2d')
-    ctx.clearRect(0, 0, canvas.width, canvas.height)
-    const source = getLayerPreview(layerId)
+    const target = thumbnail.current
+    const context = target.getContext('2d')
+    if (!context) return
+    context.clearRect(0, 0, target.width, target.height)
+    const source = getLayerPreview?.(layerId)
     if (!source?.width || !source.height) return
-    const scale = Math.min(canvas.width / source.width, canvas.height / source.height)
+    const scale = Math.min(target.width / source.width, target.height / source.height)
     const width = source.width * scale
     const height = source.height * scale
-    ctx.drawImage(source, (canvas.width - width) / 2, (canvas.height - height) / 2, width, height)
-  }, [layerId, pixelRevision, getLayerPreview])
-
+    context.drawImage(source, (target.width - width) / 2, (target.height - height) / 2, width, height)
+  }, [layerId, revision, getLayerPreview])
   return <canvas ref={thumbnail} className="layer-thumb" width="80" height="80" aria-hidden="true" />
 }
 
-function LayerPanel({ layers, activeId, select, toggle, setOpacity, rename, add, remove, move, disabled, getLayerPreview, Close }) {
+function LayerPanel({ layers, getLayerPreview, activeId, select, toggle, setOpacity, rename, add, remove, move, disabled, Close }) {
   const [drag, setDrag] = useState(null) 
+  const [renameDraft, setRenameDraft] = useState(null)
   const dragged = useRef(false)          // 끌고 난 직후 클릭 통제
 
   const active = layers.find(l => l.layerId === activeId)
@@ -106,10 +107,11 @@ function LayerPanel({ layers, activeId, select, toggle, setOpacity, rename, add,
               onPointerDown={e => dragStart(e, id, index)}
               onPointerMove={dragMove}
               onPointerUp={dragEnd}
+              onPointerLeave={() => { if (drag && !drag.moving) setDrag(null) }}
               onPointerCancel={() => setDrag(null)}>
               <span className="layer-grip"><Icon name="grip" /></span>
               <button className="layer-select" aria-pressed={id === activeId} onClick={() => { if (!dragged.current) select(id) }}>
-                <LayerThumbnail layerId={id} pixelRevision={layer.pixelRevision} getLayerPreview={getLayerPreview} />
+                <LayerThumbnail layerId={id} revision={layer.pixelRevision} getLayerPreview={getLayerPreview} />
                 <span className="layer-name">{layer.name}</span>
                 {layer.category && <span className="layer-tag">{layer.category}</span>}
               </button>
@@ -128,10 +130,24 @@ function LayerPanel({ layers, activeId, select, toggle, setOpacity, rename, add,
             onChange={e => setOpacity(activeId, e.target.value / 100)} />
           <span>{opacity}%</span>
         </label>
-        <button disabled={disabled} onClick={() => {
-          const name = window.prompt('레이어 이름 (1~80자)', active.name)
-          if (name !== null) rename(activeId, name)
-        }}>이름 변경</button>
+        {renameDraft?.id === activeId ? (
+          <form className="layer-rename" onSubmit={event => {
+            event.preventDefault()
+            const name = renameDraft.name.trim()
+            if (disabled || !name || name.length > 80) return
+            rename(activeId, name)
+            setRenameDraft(null)
+          }}>
+            <input aria-label="레이어 이름" autoFocus maxLength={80} value={renameDraft.name}
+              disabled={disabled} onChange={event => setRenameDraft({ id: activeId, name: event.target.value })} />
+            <button type="submit" disabled={disabled || !renameDraft.name.trim()}>확인</button>
+            <button type="button" onClick={() => setRenameDraft(null)}>취소</button>
+          </form>
+        ) : (
+          <button type="button" disabled={disabled} onClick={() => setRenameDraft({ id: activeId, name: active.name })}>
+            이름 변경
+          </button>
+        )}
         <button className="layer-delete" disabled={disabled || layers.length <= 1} onClick={() => remove(activeId)}>
           레이어 삭제
         </button>

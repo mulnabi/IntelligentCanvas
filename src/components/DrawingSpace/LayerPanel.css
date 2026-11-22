@@ -237,6 +237,16 @@
   color: #666;
 }
 
+.layer-rename {
+  display: flex;
+  gap: 8px;
+}
+
+.layer-rename input {
+  flex: 1;
+  min-width: 0;
+}
+
 .layer-panel .layer-delete {
   height: 40px;
   border: 1.5px solid #d33;

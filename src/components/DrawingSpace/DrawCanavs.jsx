@@ -104,9 +104,12 @@ function DrawCanvas({
       if (revision !== history.current.revision || !canDraw()) return;
       const category = ["명암", "선화", "채색"][prediction];
       if (category) changeLayers(current => {
-        if (!current.some(layer => layer.layerId === layerId && layer.category !== category)) return;
-        return { layers: current.map(layer => layer.layerId === layerId
-          ? { ...layer, name: `(${category})`, category } : layer) };
+        const layer = current.find(item => item.layerId === layerId);
+        if (!layer || layer.category === category) return;
+        const hasGeneratedName = layer.category ? layer.name === `(${layer.category})`
+          : /^레이어 \d+$/.test(layer.name) || layer.name === '기존 그림';
+        const name = hasGeneratedName ? `(${category})` : layer.name;
+        return { layers: current.map(item => item === layer ? { ...item, name, category } : item) };
       });
     } catch (error) {
       console.error('레이어 자동 분류 실패', error);
