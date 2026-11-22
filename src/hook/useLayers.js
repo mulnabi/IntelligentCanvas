@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useCallback, useState } from 'react'
 
 // 레이어 목록 관리 
 export function useLayers(w,h,layerList) {
@@ -8,7 +8,13 @@ export function useLayers(w,h,layerList) {
     data: new OffscreenCanvas(size.w, size.h).getContext('2d')
   })))
   const [activeId, setActiveId] = useState(layerList[0].layerId)
-  const [update, setUpdate] = useState(true)
+  const updateLayer = useCallback((id, metadata) => {
+    setLayers(current => current.map(layer => {
+      if (layer.layerId !== id) return layer
+      if (metadata) return { ...layer, ...metadata }
+      return { ...layer, pixelRevision: (layer.pixelRevision ?? 0) + 1 }
+    }))
+  }, [])
 
   const select = id => setActiveId(id)
 
@@ -57,5 +63,5 @@ export function useLayers(w,h,layerList) {
     setLayers(next)
   }
 
-  return {size, layers, activeId, select, toggle, setOpacity, add, remove, getLayer, move, setUpdate }
+  return {size, layers, activeId, select, toggle, setOpacity, add, remove, getLayer, move, updateLayer }
 }

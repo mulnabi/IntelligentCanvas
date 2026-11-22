@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 
 import ToolPicker from '../components/DrawingSpace/ToolPicker'
 import DrawCanvas from '../components/DrawingSpace/DrawCanavs'
@@ -14,14 +14,15 @@ function DrawingSpace() {
   const [toolSizes, setToolSizes] = useState({ pen: 50, eraser: 20 });
   const sizeTool = toolInfo.tool === 'eraser' ? 'eraser' : 'pen';
   const strokeSize = toolSizes[sizeTool];
+  const drawing = useRef(null);
 
   const layerState = useLayers(1080,1080,dummyLayers)
   console.log(layerState);
   
   return (
     <>
-      <ToolPicker f={setToolInfo} />
-      <DrawCanvas toolInfo={toolInfo} layers={layerState} strokeSize={strokeSize} />
+      <ToolPicker f={setToolInfo} onColorDrop={(x, y, color) => drawing.current?.fillAt(x, y, color)} />
+      <DrawCanvas ref={drawing} toolInfo={toolInfo} layers={layerState} strokeSize={strokeSize} />
       <div className="brush-size">
         <input
           aria-label={sizeTool === 'eraser' ? '지우개 크기' : '브러시 크기'}

@@ -17,6 +17,14 @@
   image-rendering: pixelated;
 }
 
+.canvas-selection {
+  position: absolute;
+  box-sizing: border-box;
+  border: 1px dashed #2458dc;
+  outline: 1px solid #fff;
+  pointer-events: none;
+}
+
 .brush-size {
   position: fixed;
   top: max(12px, env(safe-area-inset-top));

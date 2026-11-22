@@ -1,4 +1,4 @@
-import { useState, useRef } from 'react'
+import { useState, useRef, useLayoutEffect } from 'react'
 import './LayerPanel.css'
 
 const ROW_H = 56 // 줄 높이 52 + 간격 4
@@ -14,6 +14,22 @@ const icons = {
 const Icon = ({ name }) => (
   <svg viewBox="0 0 32 32"><path d={icons[name]} /></svg>
 )
+
+function LayerThumbnail({ source, pixelRevision }) {
+  const thumbnail = useRef(null)
+
+  useLayoutEffect(() => {
+    const target = thumbnail.current
+    const ctx = target.getContext('2d')
+    ctx.clearRect(0, 0, target.width, target.height)
+    const scale = Math.min(target.width / source.width, target.height / source.height)
+    const width = source.width * scale
+    const height = source.height * scale
+    ctx.drawImage(source, (target.width - width) / 2, (target.height - height) / 2, width, height)
+  }, [source, pixelRevision])
+
+  return <canvas ref={thumbnail} className="layer-thumb" width="80" height="80" aria-hidden="true" />
+}
 
 function LayerPanel({ layers, activeId, select, toggle, setOpacity, add, remove, move, Close }) {
   const [drag, setDrag] = useState(null) 
@@ -97,7 +113,7 @@ const dragLeave = () => {
               onPointerCancel={() => setDrag(null)}>
               <span className="layer-grip"><Icon name="grip" /></span>
               <button className="layer-select" onClick={() => { if (!dragged.current) select(id) }}>
-                <span className="layer-thumb"></span>
+                <LayerThumbnail source={layer.data.canvas} pixelRevision={layer.pixelRevision} />
                 <span className="layer-name">{layer.name}</span>
                 {layer.category && <span className="layer-tag">{layer.category}</span>}
               </button>
