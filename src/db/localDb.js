@@ -1,13 +1,14 @@
 import Dexie from 'dexie'
+import { firebaseBrowserStorage } from '../config/firebaseRuntime'
 
-export const LOCAL_DB_NAME = 'IntelligentCanvasLocal'
+export const LOCAL_DB_NAME = firebaseBrowserStorage.databaseName
 export const LOCAL_DB_VERSION = 5
 
 // HMR에서도 이전 스키마 연결만 교체하고 같은 DB와 기존 레코드를 보존한다.
 const cachedDb = import.meta.hot?.data.localDb
-const reusable = cachedDb?.verno === LOCAL_DB_VERSION
+const reusable = cachedDb?.name === LOCAL_DB_NAME && cachedDb.verno === LOCAL_DB_VERSION
 if (cachedDb && !reusable) cachedDb.close()
-export const localDb = reusable ? cachedDb : new Dexie(LOCAL_DB_NAME)
+export const localDb = reusable ? cachedDb : new Dexie(LOCAL_DB_NAME, { autoOpen: firebaseBrowserStorage.enabled })
 if (!reusable) {
   // v1 계약을 그대로 유지한다. 콘텐츠 없는 기존 작품은 빈 Canvas로 열린다.
   localDb.version(1).stores({

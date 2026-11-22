@@ -1,5 +1,6 @@
 import { doc } from 'firebase/firestore'
 import { httpsCallable } from 'firebase/functions'
+import { firebaseBrowserStorage } from '../config/firebaseRuntime'
 import { getSessionIdToken, waitForAuthSession } from './authSession'
 import { readServerDocument } from './firestoreRead'
 
@@ -12,7 +13,7 @@ export const isConnectionFailure = error => [
   'unavailable', 'deadline-exceeded', 'firestore/unavailable', 'firestore/deadline-exceeded', 'auth/network-request-failed',
 ].includes(error?.code) || error instanceof TypeError || error?.name === 'TimeoutError'
 const isReload = globalThis.performance?.getEntriesByType('navigation')[0]?.type === 'reload'
-const keyFor = (uid, artworkId) => `intelligentcanvas:editing:${uid}:${artworkId}`
+const keyFor = (uid, artworkId) => `${firebaseBrowserStorage.keyPrefix}:editing:${uid}:${artworkId}`
 
 function read(storage, key) {
   try { return globalThis[storage].getItem(key) } catch { return null }
@@ -115,7 +116,7 @@ export function readTabGrant(uid, artworkId) {
 let deviceId
 export function getDeviceId() {
   if (!deviceId) {
-    const key = 'intelligentcanvas:device-id'
+    const key = `${firebaseBrowserStorage.keyPrefix}:device-id`
     deviceId = read('localStorage', key) || crypto.randomUUID()
     try { localStorage.setItem(key, deviceId) } catch { /* 기기 ID는 인증에 사용하지 않는다. */ }
   }

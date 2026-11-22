@@ -30,3 +30,7 @@ dist-ssr
 .env
 .env.*
 !.env.example
+*firebase-adminsdk*.json
+[Ss]ervice-[Aa]ccount*.json
+[Ss]ervice[Aa]ccount*.json
+firebase.firebase-test.local.json

@@ -2,9 +2,10 @@ import { deleteApp, getApps, initializeApp } from 'firebase/app'
 import { beforeAuthStateChanged, browserLocalPersistence, connectAuthEmulator, initializeAuth, inMemoryPersistence } from 'firebase/auth'
 import { connectFirestoreEmulator, getFirestore, terminate } from 'firebase/firestore'
 import { withCanvasSaved } from '../services/pendingCanvasChanges'
-import { firebaseEmulators, resolveFirebaseEnvironment } from './firebaseEnvironment'
+import { firebaseEmulators } from './firebaseEnvironment'
+import { firebaseAppName, requireFirebaseEnvironment } from './firebaseRuntime'
 
-export const firebaseEnvironment = resolveFirebaseEnvironment(import.meta.env, globalThis.location?.origin)
+export const firebaseEnvironment = requireFirebaseEnvironment()
 
 function configurationError(message) {
   return new Error(`[Firebase 설정] ${message}`)
@@ -35,10 +36,10 @@ function createClients(name) {
   const app = initializeApp(firebaseEnvironment.config, name)
   // 일반 앱만 로그인 상태를 유지한다. 별도 테스트 앱은 기존처럼 메모리에 격리한다.
   const auth = initializeAuth(app, {
-    persistence: name === '[DEFAULT]' ? browserLocalPersistence : inMemoryPersistence,
+    persistence: name === firebaseAppName ? browserLocalPersistence : inMemoryPersistence,
   })
   if (firebaseEnvironment.mode === 'emulator') connectAuthEmulator(auth, firebaseEmulators.auth, { disableWarnings: true })
-  if (name === '[DEFAULT]') {
+  if (name === firebaseAppName) {
     // SDK가 만료된 세션을 직접 반납할 때도 현재 편집의 로컬 저장을 기다린다.
     beforeAuthStateChanged(auth, nextUser => {
       if (!nextUser && auth.currentUser) return withCanvasSaved(() => {})
@@ -68,7 +69,7 @@ export async function disposeEmulatorClients(clients) {
   }
 }
 
-const defaultClients = createClients('[DEFAULT]')
+const defaultClients = createClients(firebaseAppName)
 export const app = defaultClients.app
 export const auth = defaultClients.auth
 export const db = defaultClients.db

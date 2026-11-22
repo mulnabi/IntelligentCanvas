@@ -7,8 +7,25 @@
   "storage": {
     "rules": "storage.production.rules"
   },
+  "hosting": {
+    "public": "dist",
+    "ignore": ["firebase.json", "**/.*", "**/node_modules/**"],
+    "rewrites": [
+      { "source": "**", "destination": "/index.html" }
+    ]
+  },
   "functions": {
     "source": "functions",
-    "runtime": "nodejs22"
+    "runtime": "nodejs22",
+    "ignore": [
+      "node_modules",
+      ".git",
+      "**/.env*",
+      "**/*firebase-adminsdk*.json",
+      "**/[Ss]ervice-[Aa]ccount*.json",
+      "**/[Ss]ervice[Aa]ccount*.json",
+      "**/*.pem",
+      "**/*.key"
+    ]
   }
 }
