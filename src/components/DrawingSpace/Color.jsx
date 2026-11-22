@@ -1,5 +1,6 @@
 
-import { useState } from 'react'
+import { useState, useRef } from 'react'
+import { createPortal } from 'react-dom'
 import './Color.css'
 
 import { Blind } from '../mainComponents'
@@ -42,19 +43,21 @@ function hsvToHex({ h, s, v }) {
 }
 // ---------------------
 
-function Color({ color, onChange }) {
+function Color({ color, onChange, onColorDrop }) {
   const [hide, setHide] = useState(true)
 
   // ------ 추가-2 : 색상 상태 ------
   const [selection, setSelection] = useState(null)
   const [recent, setRecent] = useState([color || '#ff0000'])
-  // 드래그 중인 HSV 정밀도를 유지하고 외부 HEX가 바뀌면 즉시 반영한다.
+  const colorPress = useRef(null)
+  const [dragPreview, setDragPreview] = useState(null)
+
   const hsv = selection && (color === undefined || selection.hex === color) ? selection.hsv : hexToHsv(color)
   const selectedColor = hsvToHex(hsv)
 
   function changeColor(next) {
     const hex = hsvToHex(next)
-    setSelection({ hex, hsv: next })
+    setSelection({ hsv: next, hex })
     onChange?.(hex)
   }
 
@@ -84,7 +87,51 @@ function Color({ color, onChange }) {
   // ---------------------
 
   return(<>
-    <div className="openColorPicker" style={{background: selectedColor}} onClick={() => {setHide(false)}}></div>
+    {dragPreview && createPortal(
+      <span
+        aria-hidden="true"
+        className="color-drag-preview"
+        style={{ left: dragPreview.x, top: dragPreview.y, background: selectedColor }}
+      />,
+      document.body
+    )}
+    <button
+      type="button"
+      className="openColorPicker"
+      aria-label="색 지정"
+      style={{ background: selectedColor }}
+      onPointerDown={event => {
+        if (event.button !== 0 || colorPress.current) return
+        colorPress.current = { id: event.pointerId, x: event.clientX, y: event.clientY, moved: false }
+        event.currentTarget.setPointerCapture(event.pointerId)
+      }}
+      onPointerMove={event => {
+        const press = colorPress.current
+        if (press?.id !== event.pointerId) return
+        if (!press.moved && Math.hypot(event.clientX - press.x, event.clientY - press.y) < 6) return
+        press.moved = true
+        setDragPreview({ x: event.clientX, y: event.clientY })
+      }}
+      onPointerUp={event => {
+        const press = colorPress.current
+        if (press?.id !== event.pointerId) return
+        colorPress.current = null
+        setDragPreview(null)
+        if (press.moved || Math.hypot(event.clientX - press.x, event.clientY - press.y) >= 6) {
+          onColorDrop?.(event.clientX, event.clientY, selectedColor)
+        } else {
+          setHide(false)
+        }
+      }}
+      onLostPointerCapture={event => {
+        if (colorPress.current?.id !== event.pointerId) return
+        colorPress.current = null
+        setDragPreview(null)
+      }}
+      onClick={event => {
+        if (event.detail === 0) setHide(false)
+      }}
+    />
     <Blind hide={hide} onClick={() => {setHide(true)}}>
       <div className="color-picker-menu" onClick={(e) => e.stopPropagation()}>
 
@@ -125,6 +172,7 @@ function Color({ color, onChange }) {
               changeSV(e)
             }}
             onPointerMove={(e) => {
+              e.stopPropagation()
               if (e.currentTarget.hasPointerCapture(e.pointerId)) changeSV(e)
             }}
           >

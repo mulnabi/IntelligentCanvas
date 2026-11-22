@@ -17,7 +17,7 @@ const ToolRadio=({ value, tool, f, children })=>(
   </>
 );
 
-function ToolPicker({f}) {
+function ToolPicker({f, onColorDrop}) {
   const [tool, setTool] = useState('pen');
   const [color, setColor] = useState('#000');
   const onPick=e=>{
@@ -38,6 +38,7 @@ function ToolPicker({f}) {
         </ToolRadio>
         <Color 
           color={color}
+          onColorDrop={onColorDrop}
           onChange={e=>{
             setColor(e)
             f({ tool: tool, color: e })

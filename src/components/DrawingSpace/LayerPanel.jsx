@@ -1,4 +1,4 @@
-import { useState, useRef } from 'react'
+import { useLayoutEffect, useState, useRef } from 'react'
 import './LayerPanel.css'
 
 const ROW_H = 56 // 줄 높이 52 + 간격 4
@@ -15,7 +15,23 @@ const Icon = ({ name }) => (
   <svg viewBox="0 0 32 32"><path d={icons[name]} /></svg>
 )
 
-function LayerPanel({ layers, activeId, select, toggle, setOpacity, rename, add, remove, move, disabled, Close }) {
+function LayerThumbnail({ source, revision }) {
+  const thumbnail = useRef(null)
+  useLayoutEffect(() => {
+    const target = thumbnail.current
+    const context = target.getContext('2d')
+    if (!context) return
+    context.clearRect(0, 0, target.width, target.height)
+    if (!source?.width || !source.height) return
+    const scale = Math.min(target.width / source.width, target.height / source.height)
+    const width = source.width * scale
+    const height = source.height * scale
+    context.drawImage(source, (target.width - width) / 2, (target.height - height) / 2, width, height)
+  }, [source, revision])
+  return <canvas ref={thumbnail} className="layer-thumb" width="80" height="80" aria-hidden="true" />
+}
+
+function LayerPanel({ layers, thumbnails, activeId, select, toggle, setOpacity, rename, add, remove, move, disabled, Close }) {
   const [drag, setDrag] = useState(null) 
   const dragged = useRef(false)          // 끌고 난 직후 클릭 통제
 
@@ -89,10 +105,11 @@ function LayerPanel({ layers, activeId, select, toggle, setOpacity, rename, add,
               onPointerDown={e => dragStart(e, id, index)}
               onPointerMove={dragMove}
               onPointerUp={dragEnd}
+              onPointerLeave={() => { if (drag && !drag.moving) setDrag(null) }}
               onPointerCancel={() => setDrag(null)}>
               <span className="layer-grip"><Icon name="grip" /></span>
               <button className="layer-select" aria-pressed={id === activeId} onClick={() => { if (!dragged.current) select(id) }}>
-                <span className="layer-thumb"></span>
+                <LayerThumbnail {...thumbnails.get(id)} />
                 <span className="layer-name">{layer.name}</span>
                 {layer.category && <span className="layer-tag">{layer.category}</span>}
               </button>

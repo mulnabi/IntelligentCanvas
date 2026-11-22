@@ -7,7 +7,7 @@ import { createLayerCanvas } from '../services/layerCanvas'
 import { registerPendingCanvasEditor } from '../services/pendingCanvasChanges'
 import { canWriteOpenArtwork } from '../services/editSessionService'
 
-const loadingState = { status: 'loading', ready: false, locked: false, error: '', failure: null, layers: [], activeId: null }
+const loadingState = { status: 'loading', ready: false, locked: false, error: '', failure: null, layers: [], thumbnails: new Map(), activeId: null }
 
 export function useCanvasPersistence({ uid, artworkId, width, height }, canvasApi, serverSnapshot) {
   const sessionRef = useRef(null)
@@ -23,7 +23,7 @@ export function useCanvasPersistence({ uid, artworkId, width, height }, canvasAp
     const session = {
       disposed: false, ready: false, activeStroke: false, locks: 0, timer: null, busy: null,
       error: '', failure: null, hadContent: false, layers: [], activeId: null, previousIds: [],
-      revision: 0, metadataRevision: 0, dirtyPixels: new Map(), initialContents: null,
+      revision: 0, metadataRevision: 0, dirtyPixels: new Map(), pixelRevisions: new Map(), initialContents: null,
     }
     let renderer
     const unsaved = () => session.metadataRevision > 0 || session.dirtyPixels.size > 0
@@ -35,6 +35,9 @@ export function useCanvasPersistence({ uid, artworkId, width, height }, canvasAp
       setState({
         status, ready: session.ready, locked: session.locks > 0, error: session.error, failure: session.failure,
         layers: session.layers, activeId: session.activeId,
+        thumbnails: new Map(session.layers.map(({ layerId }) => [layerId, {
+          source: renderer?.getOriginal(layerId, false), revision: session.pixelRevisions.get(layerId),
+        }])),
       })
     }
     const fail = (error, failure) => {
@@ -95,6 +98,7 @@ export function useCanvasPersistence({ uid, artworkId, width, height }, canvasAp
     }
     const lock = () => {
       session.locks++
+      session.revision++
       canvasApi.current?.finishStroke()
       emit()
       return () => { session.locks = Math.max(0, session.locks - 1); emit() }
@@ -111,9 +115,9 @@ export function useCanvasPersistence({ uid, artworkId, width, height }, canvasAp
       session.ready = false
       fail(error, 'render')
     }
-    const compose = () => {
+    const compose = preview => {
       try {
-        renderer.compose(session.layers)
+        renderer.compose(session.layers, canEdit() ? preview : undefined)
       } catch (error) {
         canvasApi.current?.finishStroke()
         renderError(error)
@@ -122,18 +126,30 @@ export function useCanvasPersistence({ uid, artworkId, width, height }, canvasAp
     sessionRef.current = {
       dirty, flush, lock,
       canEdit,
-      original: (layerId, allocate) => canEdit() ? renderer.getOriginal(layerId, allocate) : undefined,
+      original: (layerId, allocate) => canEdit() && session.layers.some(layer => layer.layerId === layerId)
+        ? renderer.getOriginal(layerId, allocate) : undefined,
       compose,
-      start: () => { if (canEdit()) { clearTimeout(session.timer); session.activeStroke = true; emit() } },
+      start: () => { if (canEdit()) { clearTimeout(session.timer); session.revision++; session.activeStroke = true; emit() } },
       end: (layerId, changed) => {
         session.activeStroke = false
-        if (changed) session.dirtyPixels.set(layerId, ++session.revision)
+        if (changed) {
+          const revision = ++session.revision
+          session.dirtyPixels.set(layerId, revision)
+          session.pixelRevisions.set(layerId, revision)
+        }
         schedule()
+      },
+      watchLayerRevision: layerId => {
+        const revision = session.revision
+        const isCurrent = () => canEdit() && !session.activeStroke && session.activeId === layerId
+          && revision === session.revision && session.layers.some(layer => layer.layerId === layerId && layer.visible)
+        return isCurrent() ? isCurrent : undefined
       },
       renderError,
       select: layerId => {
-        if (!canView() || !session.layers.some(layer => layer.layerId === layerId)) return
+        if (!canView() || session.activeId === layerId || !session.layers.some(layer => layer.layerId === layerId)) return
         session.activeId = layerId
+        session.revision++
         emit()
       },
       changeLayers: update => {
@@ -144,6 +160,7 @@ export function useCanvasPersistence({ uid, artworkId, width, height }, canvasAp
           // 지울 레이어가 현재 획의 입력 대상일 수도 있다.
           canvasApi.current?.finishStroke()
           session.dirtyPixels.delete(change.removedId)
+          session.pixelRevisions.delete(change.removedId)
           renderer.remove(change.removedId)
         }
         session.layers = change.layers.map((layer, sortOrder) => ({ ...layer, sortOrder }))
@@ -228,7 +245,8 @@ export function useCanvasPersistence({ uid, artworkId, width, height }, canvasAp
     onStrokeEnd: (layerId, changed) => sessionRef.current?.end(layerId, changed),
     onRenderError: error => sessionRef.current?.renderError(error),
     getLayerCanvas: (layerId, allocate) => sessionRef.current?.original(layerId, allocate),
-    compose: () => sessionRef.current?.compose(),
+    compose: preview => sessionRef.current?.compose(preview),
+    watchLayerRevision: layerId => sessionRef.current?.watchLayerRevision(layerId),
     selectLayer: layerId => sessionRef.current?.select(layerId),
     changeLayers: update => sessionRef.current?.changeLayers(update),
     retrySave,

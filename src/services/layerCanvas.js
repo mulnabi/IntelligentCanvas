@@ -38,14 +38,14 @@ export function createLayerCanvas(display, width, height, onContextLost) {
     canvas.height = 0
   }
 
-  function compose(layers) {
+  function compose(layers, preview) {
     if (output.isContextLost?.()) throw canvasImageError('그림판 메모리를 복구하려면 그림을 다시 불러와 주세요.')
     output.clearRect(0, 0, width, height)
     // 목록은 위에서 아래다. 합성은 가장 뒤에 있는 레이어부터 그린다.
     try {
       for (let index = layers.length - 1; index >= 0; index--) {
         const { layerId, visible, opacity } = layers[index]
-        const original = getOriginal(layerId, false)
+        const original = preview?.layerId === layerId ? preview.canvas : getOriginal(layerId, false)
         if (visible && opacity > 0 && original) {
           output.globalAlpha = opacity
           output.drawImage(original, 0, 0)

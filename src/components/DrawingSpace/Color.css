@@ -2,9 +2,29 @@
 .openColorPicker{
   width: 40px;
   height: 40px;
+  padding: 0;
+  border: 0;
   border-radius: 50%;
   outline: 1px solid var(--line);
-  cursor: pointer;
+  cursor: grab;
+  touch-action: none;
+}
+
+.openColorPicker:active {
+  cursor: grabbing;
+}
+
+.color-drag-preview {
+  position: fixed;
+  z-index: 30;
+  width: 22px;
+  height: 22px;
+  box-sizing: border-box;
+  border: 2px solid #fff;
+  border-radius: 50%;
+  box-shadow: 0 1px 4px #0006;
+  pointer-events: none;
+  transform: translate(-50%, -50%);
 }
 
 .color-picker-menu{

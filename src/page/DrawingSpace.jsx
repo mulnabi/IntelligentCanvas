@@ -8,6 +8,7 @@ import RecoveryDrafts from '../components/DrawingSpace/RecoveryDrafts'
 import ArtworkHistory from '../components/DrawingSpace/ArtworkHistory'
 
 import { useLayers } from '../hook/useLayers'
+import { useLayerClassification } from '../hook/useLayerClassification'
 import { useCanvasPersistence } from '../hook/useCanvasPersistence'
 import { useEditSession } from '../hook/useEditSession'
 import { useArtworkSync } from '../hook/useArtworkSync'
@@ -20,6 +21,9 @@ import './DrawingSpace.css'
 function ArtworkEditor({ artwork, edit, serverSnapshot }) {
   const canvasApi = useRef(null)
   const [toolInfo, setToolInfo] = useState({tool: 'pen', color: '#000000'});
+  const [toolSizes, setToolSizes] = useState({ pen: 4, eraser: 20 })
+  const sizeTool = toolInfo.tool === 'eraser' ? 'eraser' : 'pen'
+  const strokeSize = toolSizes[sizeTool]
   const [inputError, setInputError] = useState('')
   const [retryingSize, setRetryingSize] = useState(false)
   const persistence = useCanvasPersistence(artwork, canvasApi, serverSnapshot)
@@ -28,12 +32,23 @@ function ArtworkEditor({ artwork, edit, serverSnapshot }) {
   const statusText = { loading: '그림을 불러오는 중…', ready: '그리거나 레이어 설정을 바꾸면 자동 저장됩니다', pending: '저장 대기 중…', saving: '저장 중…', saved: '이 브라우저에 저장됨', error: '그림 처리 실패' }
 
   const layerState = useLayers(persistence)
+  const classification = useLayerClassification(persistence.watchLayerRevision, layerState.categorize)
   const activeLayer = layerState.layers.find(layer => layer.layerId === layerState.activeId)
   return (
     <>
-      <ToolPicker f={setToolInfo} />
+      <ToolPicker f={setToolInfo} onColorDrop={(x, y, color) => canvasApi.current?.fillAt(x, y, color)} />
       <DrawCanvas toolInfo={toolInfo} artwork={artwork} canvasApi={canvasApi} activeLayer={activeLayer} readOnly={!edit.writable}
+        strokeSize={strokeSize} onClassifyStroke={classification.classify}
         onInputError={error => setInputError(error ? getCanvasErrorMessage(error) : '')} {...persistence}/>
+      <div className="brush-size">
+        <input type="range" aria-label={sizeTool === 'eraser' ? '지우개 크기' : '브러시 크기'}
+          min="1" max="100" value={strokeSize} disabled={!edit.writable || !persistence.ready || persistence.locked}
+          onChange={event => {
+            const size = event.currentTarget.valueAsNumber
+            setToolSizes(sizes => ({ ...sizes, [sizeTool]: size }))
+          }} />
+        <span aria-hidden="true">{strokeSize} px</span>
+      </div>
       {persistence.ready && <LayerMenu {...layerState} disabled={persistence.locked || !edit.writable} />}
       {artwork && <aside aria-label="현재 작품 정보" data-artwork-id={artwork.artworkId} data-server-version={serverSnapshot?.serverVersion}
         style={{ position: 'fixed', left: 12, bottom: 12, zIndex: 2, maxWidth: 'calc(100% - 48px)', background: 'white', padding: '8px 12px', borderRadius: 8 }}>
@@ -42,6 +57,11 @@ function ArtworkEditor({ artwork, edit, serverSnapshot }) {
           {sync.state && <> · <Link to={`/drawing/${encodeURIComponent(artwork.artworkId)}`}>이 브라우저의 작업본</Link></>}
         </p>}
         {(edit.writable || !persistence.ready) && <p role="status" aria-live="polite">{statusText[persistence.status]}</p>}
+        {edit.writable && persistence.ready && <label>
+          <input type="checkbox" checked={classification.enabled} disabled={persistence.locked}
+            onChange={event => classification.enable(event.target.checked)} /> AI 레이어 분류
+        </label>}
+        {edit.writable && classification.status && <p role="status">{classification.status}</p>}
         {edit.status === 'occupied' && <p role="status">다른 기기에서 편집 중이므로 읽기 전용입니다.</p>}
         {edit.takeover && <button disabled={edit.busy || !sync.online || !persistence.ready} onClick={() => {
           if (window.confirm('다른 기기의 편집 권한을 무효화하고 마지막 서버 저장본에서 시작합니다. 기존 기기의 미동기화 변경은 그 기기에만 남습니다. 강제 복구하시겠습니까?')) {

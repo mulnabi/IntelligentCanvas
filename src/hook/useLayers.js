@@ -1,7 +1,7 @@
 import { createLayer } from '../repositories/layerRepository'
 
 // 편집 세션이 레이어 목록의 최신 상태를 관리하고, 패널은 조작만 전달한다.
-export function useLayers({ layers, activeId, selectLayer, changeLayers }) {
+export function useLayers({ layers, thumbnails, activeId, selectLayer, changeLayers }) {
   const toggle = id => changeLayers(layers => ({
     layers: layers.map(layer => layer.layerId === id ? { ...layer, visible: !layer.visible } : layer),
   }))
@@ -49,5 +49,13 @@ export function useLayers({ layers, activeId, selectLayer, changeLayers }) {
     return { layers: next }
   })
 
-  return { layers, activeId, select: selectLayer, toggle, setOpacity, rename, add, remove, move }
+  const categorize = (id, category) => changeLayers(layers => {
+    const layer = layers.find(layer => layer.layerId === id)
+    if (!layer || layer.category === category) return
+    const name = /^레이어 \d+$/.test(layer.name) || (layer.category && layer.name === `(${layer.category})`)
+      ? `(${category})` : layer.name
+    return { layers: layers.map(layer => layer.layerId === id ? { ...layer, name, category } : layer) }
+  })
+
+  return { layers, thumbnails, activeId, select: selectLayer, toggle, setOpacity, rename, add, remove, move, categorize }
 }

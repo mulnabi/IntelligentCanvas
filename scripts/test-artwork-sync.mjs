@@ -570,6 +570,44 @@ try {
       await page.context().close()
     }
   })
+  await check('real_ONNX_metadata_and_the_original_PNG_sync_and_restore_in_read_only_browser', async () => {
+    const activeName = b.locator('.layer-select[aria-pressed="true"] .layer-name')
+    const oldName = await activeName.textContent()
+    const selected = b.locator('.layer-select[aria-pressed="true"]')
+    const layerIndex = await selected.evaluate(button => Array.from(button.closest('ol').children).indexOf(button.closest('li')))
+    const oldManifest = await call(b, 'getServerArtwork')
+    const layerId = oldManifest.layers[layerIndex].layerId
+    await b.getByRole('checkbox', { name: 'AI 레이어 분류' }).check()
+    await draw(b, 0.45)
+    const label = selected.locator('.layer-tag')
+    await label.waitFor({ timeout: 60000 })
+    const category = await label.textContent()
+    assert.ok(['명암', '선화', '채색'].includes(category))
+    await b.waitForFunction(async ({ uid, id, layerId, category }) => {
+      const { localDb } = await import('/src/db/localDb.js')
+      const [row, state, queue] = await Promise.all([
+        localDb.layers.get([uid, id, layerId]), localDb.artworkSync.get([uid, id]), localDb.syncQueue.get([uid, id]),
+      ])
+      return row?.category === category && !queue && state.localVersion === state.ackLocalVersion
+        && state.receipt?.serverVersion === state.serverVersion
+    }, { uid, id, layerId, category }, { timeout: 60000 })
+    const committed = await call(b, 'getServerArtwork')
+    assert.ok(committed.serverVersion > oldManifest.serverVersion)
+    const serverLayer = committed.layers.find(layer => layer.layerId === layerId)
+    assert.equal(serverLayer.category, category)
+    if (!/^레이어 \d+$/.test(oldName)) assert.equal(serverLayer.name, oldName)
+    assert.notEqual(serverLayer.image.hash, oldManifest.layers[layerIndex].image.hash)
+    const originals = await signatures(b)
+    await a.goto(base)
+    await a.getByRole('button', { name: '서버 작품 보기', exact: true }).click()
+    await a.getByRole('button', { name: `${committed.title} 열기`, exact: true }).click()
+    await a.locator('.drawcanvas[data-ready="true"][data-read-only="true"]').waitFor()
+    assert.equal(await a.getByRole('checkbox', { name: 'AI 레이어 분류' }).count(), 0)
+    await a.getByRole('button', { name: '레이어 패널 열기' }).click()
+    assert.equal(await a.locator('.layer-select').nth(layerIndex).locator('.layer-tag').textContent(), category)
+    assert.deepEqual(await signatures(a), originals)
+    assert.deepEqual(blocked, [])
+  })
 } catch (error) {
   console.error(error)
   process.exitCode = 1
