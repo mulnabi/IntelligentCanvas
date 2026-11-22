@@ -89,11 +89,14 @@ test('production rejects mixed Auth, Firestore project, Storage and Functions se
   assert.throws(() => resolveFirebaseEnvironment(production, localOrigin), /HTTPS 오리진/)
 })
 
-test('the current Functions entry point registers no functions outside Emulator discovery', () => {
+test('the default Functions entry point registers no functions without an explicit mode', () => {
   const require = createRequire(import.meta.url)
   const entry = require.resolve('../functions/src/index.js')
   const old = process.env.FUNCTIONS_EMULATOR
+  const mode = 'INTELLIGENTCANVAS_FUNCTIONS_MODE'
+  const previousMode = process.env[mode]
   delete process.env.FUNCTIONS_EMULATOR
+  delete process.env[mode]
   try {
     assert.deepEqual(Object.keys(require(entry)), [])
     delete require.cache[entry]
@@ -106,6 +109,8 @@ test('the current Functions entry point registers no functions outside Emulator 
     delete require.cache[entry]
     if (old === undefined) delete process.env.FUNCTIONS_EMULATOR
     else process.env.FUNCTIONS_EMULATOR = old
+    if (previousMode === undefined) delete process.env[mode]
+    else process.env[mode] = previousMode
   }
 })
 

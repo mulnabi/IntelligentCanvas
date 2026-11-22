@@ -1,7 +1,7 @@
 const { createHash, randomBytes, randomUUID, timingSafeEqual } = require('node:crypto')
 const { FieldValue } = require('firebase-admin/firestore')
 const { HttpsError } = require('firebase-functions/v2/https')
-const { localAdminAvailable } = require('../repositories/localFirestore')
+const { assertAdminAvailable } = require('../repositories/firebaseAdmin')
 const { withArtworkSession } = require('../repositories/editSessionRepository')
 
 const id = value => typeof value === 'string' && /^[a-zA-Z0-9_-]{1,128}$/.test(value)
@@ -22,7 +22,7 @@ function callable(fields, operation) {
   return async request => {
     const uid = request.auth?.uid
     if (!uid) throw new HttpsError('unauthenticated', '로그인이 필요합니다.')
-    if (!localAdminAvailable()) throw new HttpsError('failed-precondition', '로컬 Emulator 연결이 필요합니다.')
+    assertAdminAvailable()
     const data = request.data
     if (!data || Array.isArray(data) || typeof data !== 'object' || !id(data.artworkId)
       || Object.keys(data).some(key => key !== 'artworkId' && !fields.includes(key))

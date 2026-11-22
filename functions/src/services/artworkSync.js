@@ -1,9 +1,8 @@
 const { randomUUID } = require('node:crypto')
 const { FieldPath, FieldValue, Timestamp } = require('firebase-admin/firestore')
 const { getAuth } = require('firebase-admin/auth')
-const { getStorage } = require('firebase-admin/storage')
 const { HttpsError } = require('firebase-functions/v2/https')
-const { getLocalApp, getLocalFirestore } = require('../repositories/localFirestore')
+const { getAdminApp, getAdminFirestore, getArtworkBucket: bucket } = require('../repositories/firebaseAdmin')
 const { withArtworkSession } = require('../repositories/editSessionRepository')
 const { requireCallable, holdsSession, validProof } = require('./editSessions')
 const { maxPngBytes, sha256, validatePng } = require('./syncPng')
@@ -14,20 +13,9 @@ const integer = (n, min, max = Number.MAX_SAFE_INTEGER) => Number.isSafeInteger(
 const invalid = message => new HttpsError('invalid-argument', message)
 const conflict = () => new HttpsError('failed-precondition', '세션 또는 서버 버전이 달라 동기화를 중단했습니다.')
 const missing = () => new HttpsError('not-found', '확정된 서버 작품을 찾지 못했습니다.')
-const artworkRef = (uid, id) => getLocalFirestore().collection('users').doc(uid).collection('artworks').doc(id)
+const artworkRef = (uid, id) => getAdminFirestore().collection('users').doc(uid).collection('artworks').doc(id)
 const root = (uid, id) => `users/${uid}/artworks/${id}`
 
-function bucket() {
-  const app = getLocalApp()
-  if (process.env.FIREBASE_STORAGE_EMULATOR_HOST !== '127.0.0.1:9199'
-    || process.env.STORAGE_EMULATOR_HOST !== 'http://127.0.0.1:9199') {
-    // SDK는 STORAGE_EMULATOR_HOST를 사용한다. 분리 실행 시 Firebase가 주입한 URL도 확인한다.
-    if (process.env.FIREBASE_STORAGE_EMULATOR_HOST !== '127.0.0.1:9199'
-      || process.env.CLOUD_STORAGE_EMULATOR_HOST !== 'http://127.0.0.1:9199') throw conflict()
-    process.env.STORAGE_EMULATOR_HOST = 'http://127.0.0.1:9199'
-  }
-  return getStorage(app).bucket('intelligentcanvas-stage5a-local.invalid')
-}
 
 function normalizeMeta(meta) {
   const { title, widthPx, heightPx, backgroundColor } = meta || {}
@@ -232,7 +220,7 @@ async function getDeletedServerArtworks(request) {
   if (!Array.isArray(ids) || !ids.length || ids.length > 40 || !ids.every(validId)) {
     throw invalid('삭제 상태를 확인할 작품을 지정해 주세요.')
   }
-  const snapshots = await getLocalFirestore().getAll(...[...new Set(ids)].map(id => artworkRef(uid, id)),
+  const snapshots = await getAdminFirestore().getAll(...[...new Set(ids)].map(id => artworkRef(uid, id)),
     { fieldMask: ['ownerUid', 'state', 'serverVersion'] })
   return snapshots.filter(row => row.get('ownerUid') === uid && row.get('state') === 'deleted')
     .map(row => ({ artworkId: row.id, serverVersion: row.get('serverVersion') }))
@@ -287,7 +275,7 @@ async function listServerArtworks(request) {
   const { sort = 'updatedAt', cursor = null } = request.data ?? {}
   if (!['updatedAt', 'createdAt', 'title'].includes(sort)) throw invalid('서버 작품 정렬을 확인해 주세요.')
   const direction = sort === 'title' ? 'asc' : 'desc'
-  let query = getLocalFirestore().collection('users').doc(uid).collection('artworks')
+  let query = getAdminFirestore().collection('users').doc(uid).collection('artworks')
     .where('ownerUid', '==', uid).where('state', '==', 'active').where('publication', '==', 'ready')
     .orderBy(sort, direction).orderBy(FieldPath.documentId(), direction)
   if (cursor !== null) {
@@ -322,7 +310,7 @@ function binary(method, operation) {
       if (req.method !== method) return res.sendStatus(405)
       const authorization = /^Bearer (\S+)$/.exec(req.get('Authorization') || '')
       let uid
-      try { if (authorization) uid = (await getAuth(getLocalApp()).verifyIdToken(authorization[1])).uid } catch { /* 응답에 토큰 정보 없음 */ }
+      try { if (authorization) uid = (await getAuth(getAdminApp()).verifyIdToken(authorization[1])).uid } catch { /* 응답에 토큰 정보 없음 */ }
       if (!uid) throw new HttpsError('unauthenticated', '로그인이 필요합니다.')
       await operation(uid, req, res)
     } catch (error) {
