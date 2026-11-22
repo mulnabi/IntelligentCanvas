@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { Link, useNavigate } from 'react-router'
 
 import ArtworkCard from '../components/ArtworkList/ArtworkCard'
@@ -19,8 +19,10 @@ function ArtworkList({ uid, authLoading = false, authError = '' }) {
   const [catalog, setCatalog] = useState(null)
   const { artworks, loading, error, retry } = useArtworks(uid, catalog?.uid === uid ? '' : search, sort)
   const [remoteBusy, setRemoteBusy] = useState(false)
+  const [catalogBusy, setCatalogBusy] = useState(false)
   const [remoteError, setRemoteError] = useState('')
   const pendingOpen = useRef(null)
+  const catalogRequest = useRef({ latest: 0 })
   const deleteRequests = useRef(new Map())
   const remote = catalog?.uid === uid ? catalog.rows : []
   const visible = new Map(remote.map(row => [row.artworkId, { ...row, width: row.widthPx, height: row.heightPx, remoteOnly: true }]))
@@ -31,7 +33,7 @@ function ArtworkList({ uid, authLoading = false, authError = '' }) {
     }
     const confirmed = visible.get(item.artworkId)
     // 서버 목록의 표시 정보는 확정본을 따르며, 로컬 작업본은 열기 단계의 보호 로직에 맡긴다.
-    visible.set(item.artworkId, confirmed ? { ...item, ...confirmed, remoteOnly: false } : item)
+    visible.set(item.artworkId, confirmed ? { ...item, ...confirmed, remoteOnly: false, localUpdatedAt: item.updatedAt } : item)
   }
   const text = search.normalize('NFKC').trim().toLowerCase()
   const items = [...visible.values()].filter(item => item.title.normalize('NFKC').toLowerCase().includes(text))
@@ -69,38 +71,54 @@ function ArtworkList({ uid, authLoading = false, authError = '' }) {
     return artwork // 생성 후 목록에 표시하고 카드를 선택하면 ID가 포함된 경로로 이동한다.
   }
 
-  const refreshRemote = async (order = sort, cursor = null) => {
-    setRemoteBusy(true)
-    setRemoteError('')
+  const refreshRemote = useCallback(async (order, cursor = null) => {
+    const requests = catalogRequest.current
+    const request = ++requests.latest
     try {
-      const deleted = new Set(await refreshServerDeletions(uid, remote.map(row => row.artworkId)))
       const page = await listServerArtworks(uid, { sort: order, cursor })
+      if (request !== requests.latest) return
       setCatalog(current => {
-        const previous = cursor ? current?.rows ?? [] : []
+        const previous = cursor && current?.uid === uid ? current.rows : []
         const rows = new Map([...previous, ...page.rows].map(row => [row.artworkId, row]))
-        for (const id of deleted) rows.delete(id)
         return { uid, rows: [...rows.values()], nextCursor: page.nextCursor }
       })
     }
-    catch { setRemoteError('서버 작품 목록을 불러오지 못했습니다. 이 브라우저의 작품은 유지됩니다.') }
-    finally { setRemoteBusy(false) }
-  }
+    catch {
+      if (request === requests.latest && navigator.onLine) setRemoteError('서버 작품 목록을 불러오지 못했습니다.')
+    }
+    finally { if (request === requests.latest) setCatalogBusy(false) }
+  }, [uid])
+
+  useEffect(() => {
+    if (!canUse) return
+    const requests = catalogRequest.current
+    const load = () => {
+      if (navigator.onLine) void refreshRemote(sort)
+    }
+    load()
+    window.addEventListener('online', load)
+    window.addEventListener('focus', load)
+    return () => {
+      requests.latest++
+      window.removeEventListener('online', load)
+      window.removeEventListener('focus', load)
+    }
+  }, [canUse, refreshRemote, sort])
 
   const handleOpen = async (item) => {
     if (remoteBusy || pendingOpen.current) return
     const { artworkId } = item
     const drawing = `/drawing/${encodeURIComponent(artworkId)}`
-    const fromServerList = remote.some(row => row.artworkId === artworkId)
+    const serverItem = remote.find(row => row.artworkId === artworkId)
     const controller = new AbortController()
     const { signal } = controller
     pendingOpen.current = controller
-    let destination = drawing
     setRemoteBusy(true)
     setRemoteError('')
     try {
       const state = item.remoteOnly ? null : await readArtworkSync(uid, artworkId)
       signal.throwIfAborted()
-      const deleted = (fromServerList || state?.serverVersion > 0) && navigator.onLine
+      const deleted = (serverItem || state?.serverVersion > 0) && navigator.onLine
         ? await refreshServerDeletions(uid, [artworkId], false) : []
       signal.throwIfAborted()
       if (deleted.includes(artworkId)) {
@@ -108,28 +126,24 @@ function ArtworkList({ uid, authLoading = false, authError = '' }) {
         setRemoteError('서버에서 삭제된 작품입니다.')
         return
       }
-      // 목록 조회 응답과 관계없이 확정본이 있는 깨끗한 캐시는 열기 전에 서버를 확인한다.
-      const cleanCache = state?.serverVersion > 0 && state.localVersion === state.ackLocalVersion && !state.failure?.revoked
-      if (fromServerList && !item.remoteOnly && !cleanCache) {
-        destination = `${drawing}?view=server`
-      } else if (item.remoteOnly || cleanCache && (fromServerList || navigator.onLine)) {
+      const hasLocalChanges = state && (state.localVersion !== state.ackLocalVersion || state.failure?.revoked)
+      const matchesCache = serverItem && !item.remoteOnly &&
+        (item.localUpdatedAt === serverItem.updatedAt || state?.serverVersion === serverItem.serverVersion)
+      if (item.remoteOnly || navigator.onLine && !hasLocalChanges && !matchesCache && (serverItem || state?.serverVersion > 0)) {
         await downloadServerArtwork(uid, artworkId, signal)
       }
     } catch (error) {
       if (signal.aborted) return
-      if (fromServerList) {
-        if (error.code === 'sync/conflict') destination = `${drawing}?view=server`
-        else {
-          setRemoteError(error.message)
-          return
-        }
+      if (item.remoteOnly) {
+        setRemoteError(error.message)
+        return
       }
       // 연결 실패나 경합 시 작업본을 유지하고 그림판의 권한 확인에 맡긴다.
     } finally {
       pendingOpen.current = null
       if (!signal.aborted) setRemoteBusy(false)
     }
-    if (!signal.aborted) navigate(destination)
+    if (!signal.aborted) navigate(drawing)
   }
 
   const handleDelete = async artworkId => {
@@ -162,15 +176,17 @@ function ArtworkList({ uid, authLoading = false, authError = '' }) {
         <select aria-label="작품 정렬" value={sort} disabled={!canUse || remoteBusy} onChange={event => {
           const order = event.target.value
           setSort(order)
-          if (catalog) void refreshRemote(order)
         }}>
           <option value="updatedAt">최근 수정순</option>
           <option value="createdAt">최근 생성순</option>
           <option value="title">이름순</option>
         </select>
       </div>
-      {canUse && catalog?.nextCursor?.sort === sort && <>
-        {' '}<button disabled={remoteBusy} onClick={() => void refreshRemote(sort, catalog.nextCursor)}>서버 작품 더 보기</button>
+      {canUse && catalog?.uid === uid && catalog.nextCursor?.sort === sort && <>
+        {' '}<button disabled={catalogBusy || remoteBusy} onClick={() => {
+          setCatalogBusy(true)
+          void refreshRemote(sort, catalog.nextCursor)
+        }}>서버 작품 더 보기</button>
         <p>제목 검색은 로컬 작품과 현재까지 불러온 서버 작품에 적용됩니다.</p>
       </>}
       {remoteError && <p role="alert">{remoteError}</p>}
