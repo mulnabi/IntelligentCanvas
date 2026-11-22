@@ -227,15 +227,20 @@ export async function loadServerArtworkSnapshot(uid, artworkId, signal) {
   return { artwork: { uid, artworkId, title, width, height, backgroundColor }, serverVersion, layers, contents }
 }
 
-export async function downloadServerArtwork(uid, artworkId) {
+export async function downloadServerArtwork(uid, artworkId, signal) {
   const auth = await scopedAuth(uid)
   const key = [uid, artworkId]
   const state = await readArtworkSync(uid, artworkId)
   checkDownloadTarget(await localDb.artworks.get(key), state, await localDb.syncQueue.get(key))
+  signal?.throwIfAborted()
   const remote = await getConfirmedArtwork(auth, uid, artworkId)
+  signal?.throwIfAborted()
   if (state?.serverVersion >= remote.serverVersion) return remote
-  const blobs = await downloadConfirmedLayers(uid, remote)
-  await installServerArtwork(uid, remote, blobs, () => assertUser(auth, uid))
+  const blobs = await downloadConfirmedLayers(uid, remote, signal)
+  await installServerArtwork(uid, remote, blobs, () => {
+    signal?.throwIfAborted()
+    assertUser(auth, uid)
+  })
   rememberServerArtwork(uid, artworkId)
   return remote
 }

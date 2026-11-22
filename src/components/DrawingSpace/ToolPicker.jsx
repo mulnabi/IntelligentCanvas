@@ -1,4 +1,4 @@
-import { useState, useRef } from 'react'
+import { useState } from 'react'
 import './ToolPicker.css'
 
 import Color from './Color'

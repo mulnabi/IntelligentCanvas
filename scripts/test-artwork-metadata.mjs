@@ -122,6 +122,17 @@ try {
     })
     assert.deepEqual(denied, Array(5).fill('artwork/auth-required'))
   })
+  await check('signed_out_direct_drawing_and_server_snapshot_never_mount_canvas', async () => {
+    const id = crypto.randomUUID()
+    for (const suffix of ['', '?view=server']) {
+      await page.goto(`${base}/drawing/${id}${suffix}`)
+      const login = page.getByRole('link', { name: '로그인', exact: true })
+      await login.waitFor()
+      assert.equal(await page.locator('canvas').count(), 0)
+      await login.click()
+      await page.waitForURL(`${base}/login`)
+    }
+  })
   await check('login_signup_back_and_legacy_signup_routes', async () => {
     const goBack = () => page.getByRole('button', { name: '로그인 화면으로 돌아가기' }).click()
     await page.getByRole('button', { name: '회원가입', exact: true }).click()

@@ -1,5 +1,5 @@
 
-import { useState, useEffect } from 'react'
+import { useState } from 'react'
 import './Color.css'
 
 import { Blind } from '../mainComponents'
@@ -46,18 +46,16 @@ function Color({ color, onChange }) {
   const [hide, setHide] = useState(true)
 
   // ------ 추가-2 : 색상 상태 ------
-  const [hsv, setHsv] = useState(() => hexToHsv(color))
+  const [selection, setSelection] = useState(null)
   const [recent, setRecent] = useState([color || '#ff0000'])
-
-  useEffect(() => {
-    setHsv(hexToHsv(color))
-  }, [color])
-
+  // 드래그 중인 HSV 정밀도를 유지하고 외부 HEX가 바뀌면 즉시 반영한다.
+  const hsv = selection && (color === undefined || selection.hex === color) ? selection.hsv : hexToHsv(color)
   const selectedColor = hsvToHex(hsv)
 
   function changeColor(next) {
-    setHsv(next)
-    onChange?.(hsvToHex(next))
+    const hex = hsvToHex(next)
+    setSelection({ hex, hsv: next })
+    onChange?.(hex)
   }
 
   function changeHue(e) {

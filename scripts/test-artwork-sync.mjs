@@ -528,6 +528,48 @@ try {
     assert.equal(preserved.archivedHash, oversized.hash)
     assert.ok(preserved.newSize < 8 * 1024 * 1024)
   })
+  await check('leaving_the_list_cancels_a_pending_download_and_keeps_the_current_artwork', async () => {
+    const page = await tab()
+    let release
+    let intercepted
+    const gate = new Promise(resolve => { release = resolve })
+    const waiting = new Promise(resolve => { intercepted = resolve })
+    try {
+      await account(page, email, false)
+      await page.goto(base)
+      const localId = await page.evaluate(async uid => (await (await import('/src/repositories/artworkRepository.js'))
+        .createArtwork(uid, { title: '이동 확인용 작품' })).artworkId, uid)
+      await page.getByRole('button', { name: '이동 확인용 작품 열기', exact: true }).click()
+      const localUrl = `${base}/drawing/${localId}`
+      await page.waitForURL(localUrl)
+      await page.getByRole('link', { name: '작품 목록', exact: true }).click()
+      await page.getByRole('button', { name: '서버 작품 보기', exact: true }).click()
+      const { title: remoteTitle } = await call(page, 'getServerArtwork')
+      await page.route('**/downloadArtworkPng?*', async route => {
+        if (route.request().method() !== 'GET') return route.fallback()
+        intercepted()
+        await gate
+        await route.continue().catch(() => {})
+      })
+      await page.getByRole('button', { name: `${remoteTitle} 열기`, exact: true }).click()
+      await new Promise((resolve, reject) => {
+        const timeout = setTimeout(() => reject(new Error('No pending PNG download')), 15000)
+        void waiting.then(() => { clearTimeout(timeout); resolve() })
+      })
+      await page.evaluate(() => history.back())
+      await page.waitForURL(localUrl)
+      await page.locator('.drawcanvas[data-ready="true"]').waitFor()
+      release()
+      const reopened = await page.waitForURL(`${base}/drawing/${id}`, { timeout: 2000 })
+        .then(() => true, error => { if (error.name === 'TimeoutError') return false; throw error })
+      assert.equal(reopened, false, 'a stale download must not navigate away from the current artwork')
+      assert.equal(page.url(), localUrl)
+      assert.equal((await local(page)).title, undefined, 'the canceled download must not install an artwork')
+    } finally {
+      release()
+      await page.context().close()
+    }
+  })
 } catch (error) {
   console.error(error)
   process.exitCode = 1

@@ -20,6 +20,7 @@ function ArtworkList({ uid, authLoading = false, authError = '' }) {
   const { artworks, loading, error, retry } = useArtworks(uid, catalog?.uid === uid ? '' : search, sort)
   const [remoteBusy, setRemoteBusy] = useState(false)
   const [remoteError, setRemoteError] = useState('')
+  const pendingOpen = useRef(null)
   const deleteRequests = useRef(new Map())
   const remote = catalog?.uid === uid ? catalog.rows : []
   const visible = new Map(remote.map(row => [row.artworkId, { ...row, width: row.widthPx, height: row.heightPx, remoteOnly: true }]))
@@ -36,6 +37,8 @@ function ArtworkList({ uid, authLoading = false, authError = '' }) {
   const items = [...visible.values()].filter(item => item.title.normalize('NFKC').toLowerCase().includes(text))
     .sort((a, b) => (sort === 'title' ? a.title.localeCompare(b.title, 'ko') : b[sort] - a[sort]) || a.artworkId.localeCompare(b.artworkId))
   const canUse = !!uid && !authLoading && !authError
+
+  useEffect(() => () => pendingOpen.current?.abort(), [])
 
   useEffect(() => {
     if (!canUse) return
@@ -84,16 +87,23 @@ function ArtworkList({ uid, authLoading = false, authError = '' }) {
   }
 
   const handleOpen = async (item) => {
-    if (remoteBusy) return
+    if (remoteBusy || pendingOpen.current) return
     const { artworkId } = item
     const drawing = `/drawing/${encodeURIComponent(artworkId)}`
     const fromServerList = remote.some(row => row.artworkId === artworkId)
+    const controller = new AbortController()
+    const { signal } = controller
+    pendingOpen.current = controller
+    let destination = drawing
     setRemoteBusy(true)
     setRemoteError('')
     try {
       const state = item.remoteOnly ? null : await readArtworkSync(uid, artworkId)
-      if ((fromServerList || state?.serverVersion > 0) && navigator.onLine
-        && (await refreshServerDeletions(uid, [artworkId], false)).includes(artworkId)) {
+      signal.throwIfAborted()
+      const deleted = (fromServerList || state?.serverVersion > 0) && navigator.onLine
+        ? await refreshServerDeletions(uid, [artworkId], false) : []
+      signal.throwIfAborted()
+      if (deleted.includes(artworkId)) {
         setCatalog(current => current && { ...current, rows: current.rows.filter(row => row.artworkId !== artworkId) })
         setRemoteError('서버에서 삭제된 작품입니다.')
         return
@@ -101,20 +111,25 @@ function ArtworkList({ uid, authLoading = false, authError = '' }) {
       // 목록 조회 응답과 관계없이 확정본이 있는 깨끗한 캐시는 열기 전에 서버를 확인한다.
       const cleanCache = state?.serverVersion > 0 && state.localVersion === state.ackLocalVersion && !state.failure?.revoked
       if (fromServerList && !item.remoteOnly && !cleanCache) {
-        navigate(`${drawing}?view=server`)
-        return
+        destination = `${drawing}?view=server`
+      } else if (item.remoteOnly || cleanCache && (fromServerList || navigator.onLine)) {
+        await downloadServerArtwork(uid, artworkId, signal)
       }
-      const canRefresh = (fromServerList || navigator.onLine) && cleanCache
-      if (item.remoteOnly || canRefresh) await downloadServerArtwork(uid, artworkId)
     } catch (error) {
+      if (signal.aborted) return
       if (fromServerList) {
-        if (error.code === 'sync/conflict') navigate(`${drawing}?view=server`)
-        else setRemoteError(error.message)
-        return
+        if (error.code === 'sync/conflict') destination = `${drawing}?view=server`
+        else {
+          setRemoteError(error.message)
+          return
+        }
       }
       // 연결 실패나 경합 시 작업본을 유지하고 그림판의 권한 확인에 맡긴다.
-    } finally { setRemoteBusy(false) }
-    navigate(drawing)
+    } finally {
+      pendingOpen.current = null
+      if (!signal.aborted) setRemoteBusy(false)
+    }
+    if (!signal.aborted) navigate(destination)
   }
 
   const handleDelete = async artworkId => {

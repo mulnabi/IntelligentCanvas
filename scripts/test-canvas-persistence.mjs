@@ -578,8 +578,12 @@ try {
     await page.waitForURL(`${base}/`)
     assert.deepEqual((await rawContent(artA.artworkId)).pixels, expected)
     latestPixels = expected
-    await page.getByRole('button', { name: 'PNG A 이름 변경 열기', exact: true }).click()
+  })
+  await check('browser_forward_restores_pixels_saved_before_back', async () => {
+    await page.evaluate(() => history.forward())
+    await page.waitForURL(`${base}/drawing/${artA.artworkId}`)
     await ready()
+    assert.deepEqual(await pixels(), latestPixels)
   })
   await check('logout_flushes_pending_stroke_before_changing_UID', async () => {
     await stroke([[850, 500], [900, 550]])
@@ -896,6 +900,31 @@ try {
     await page.getByRole('button', { name: '다시 저장', exact: true }).click()
     await saved()
     assert.equal((await layerRows(layered.artworkId)).length, 2)
+  })
+  await check('mobile_touch_stroke_persists_a_transparent_layer', async () => {
+    const touchArtwork = await create('터치 입력 검증', 320, 240)
+    await page.setViewportSize({ width: 390, height: 844 })
+    await open(touchArtwork.artworkId)
+    const cdp = await context.newCDPSession(page)
+    try {
+      await cdp.send('Emulation.setTouchEmulationEnabled', { enabled: true })
+      const { x, y, width, height } = await page.locator('.drawcanvas').boundingBox()
+      const at = offset => [{ x: x + width * offset, y: y + height * 0.4 }]
+      await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: at(0.25) })
+      await cdp.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: at(0.6) })
+      await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] })
+      await saved()
+      const raster = await rawContent(touchArtwork.artworkId)
+      assert.deepEqual([raster.width, raster.height], [320, 240])
+      assert.equal((await sample(0, 0))[3], 0)
+      assert.ok((await sample(140, 96))[3] > 0)
+      assert.deepEqual(raster.pixels, await pixels())
+      await page.reload()
+      await ready()
+      assert.deepEqual(await pixels(), raster.pixels)
+    } finally {
+      await cdp.detach()
+    }
   })
   await check('no_uncaught_errors_or_production_artwork_requests', async () => {
     assert.deepEqual(pageErrors, [])
