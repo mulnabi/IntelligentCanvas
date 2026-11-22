@@ -1,67 +1,53 @@
-import { useCallback, useState } from 'react'
+import { createLayer } from '../repositories/layerRepository'
 
-// 레이어 목록 관리 
-export function useLayers(w,h,layerList) {
-  const [size] = useState({ w, h })
-  const [layers, setLayers] = useState(() => layerList.map(layer => ({
-    ...layer,
-    data: new OffscreenCanvas(size.w, size.h).getContext('2d')
-  })))
-  const [activeId, setActiveId] = useState(layerList[0].layerId)
-  const updateLayer = useCallback((id, metadata) => {
-    setLayers(current => current.map(layer => {
-      if (layer.layerId !== id) return layer
-      if (metadata) return { ...layer, ...metadata }
-      return { ...layer, pixelRevision: (layer.pixelRevision ?? 0) + 1 }
-    }))
-  }, [])
+// 편집 세션이 레이어 목록의 최신 상태를 관리하고, 패널은 조작만 전달한다.
+export function useLayers({ layers, activeId, selectLayer, changeLayers }) {
+  const toggle = id => changeLayers(layers => ({
+    layers: layers.map(layer => layer.layerId === id ? { ...layer, visible: !layer.visible } : layer),
+  }))
 
-  const select = id => setActiveId(id)
+  const setOpacity = (id, opacity) => changeLayers(layers => {
+    const layer = layers.find(layer => layer.layerId === id)
+    if (!layer || layer.opacity === opacity || !Number.isFinite(opacity) || opacity < 0 || opacity > 1) return
+    return { layers: layers.map(layer => layer.layerId === id ? { ...layer, opacity } : layer) }
+  })
+  const rename = (id, value) => changeLayers(layers => {
+    if (typeof value !== 'string') return
+    const name = value.trim()
+    if (!name || name.length > 80 || !layers.some(layer => layer.layerId === id && layer.name !== name)) return
+    return { layers: layers.map(layer => layer.layerId === id ? { ...layer, name } : layer) }
+  })
 
-  const toggle = id => {
-    setLayers(layers.map(l => l.layerId === id ? { ...l, visible: !l.visible } : l))
-  }
+  // 선택한 레이어 바로 위에 빈 레이어를 삽입한다.
+  const add = () => changeLayers((layers, activeId) => {
+    const names = new Set(layers.map(layer => layer.name))
+    let number = layers.length + 1
+    while (names.has(`레이어 ${number}`)) number++
+    const layer = createLayer(`레이어 ${number}`)
+    const next = [...layers]
+    next.splice(layers.findIndex(item => item.layerId === activeId), 0, layer)
+    return { layers: next, activeId: layer.layerId }
+  })
 
-  const setOpacity = (id, opacity) => {
-    setLayers(layers.map(l => l.layerId === id ? { ...l, opacity } : l))
-  }
-
-  // 선택된 레이어 바로 위에 추가
-  const add = () => {
-    const layer = {
-      layerId: 'layer-' + Date.now(),
-      name: '레이어 ' + (layers.length + 1),
-      sortOrder: 0,
-      opacity: 1,
-      visible: true,
-      isTemporary: false,
-      category: null,
-      data:new OffscreenCanvas(size.w,size.h).getContext('2d')
+  const remove = id => changeLayers((layers, activeId) => {
+    const index = layers.findIndex(layer => layer.layerId === id)
+    if (index < 0 || layers.length <= 1) return
+    const next = layers.filter(layer => layer.layerId !== id)
+    return {
+      layers: next,
+      removedId: id,
+      activeId: id === activeId ? next[Math.min(index, next.length - 1)].layerId : activeId,
     }
-    const i = layers.findIndex(l => l.layerId === activeId)
-    const next = [...layers]
-    next.splice(i, 0, layer)
-    setLayers(next)
-    setActiveId(layer.layerId)
-  }
-  const remove = id => {
-    if (layers.length <= 1) return
-    const i = layers.findIndex(l => l.layerId === id)
-    const next = layers.filter(l => l.layerId !== id)
-    setLayers(next)
-    if (id === activeId) setActiveId(next[Math.min(i, next.length - 1)].layerId)
-  }
-  const getLayer = (id=activeId) =>layers.find(l => l.layerId === id)
+  })
 
-  // id 레이어를 to번째 자리로 이동
-  const move = (id, to) => {
-    const from = layers.findIndex(l => l.layerId === id)
-    if (from === to) return
+  const move = (id, to) => changeLayers(layers => {
+    const from = layers.findIndex(layer => layer.layerId === id)
+    if (from < 0 || from === to || !Number.isInteger(to) || to < 0 || to >= layers.length) return
     const next = [...layers]
-    const [item] = next.splice(from, 1)
-    next.splice(to, 0, item)
-    setLayers(next)
-  }
+    const [layer] = next.splice(from, 1)
+    next.splice(to, 0, layer)
+    return { layers: next }
+  })
 
-  return {size, layers, activeId, select, toggle, setOpacity, add, remove, getLayer, move, updateLayer }
+  return { layers, activeId, select: selectLayer, toggle, setOpacity, rename, add, remove, move }
 }

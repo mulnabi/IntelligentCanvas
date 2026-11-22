@@ -1,10 +1,10 @@
-import { useState, useRef, useCallback, useEffect, useImperativeHandle, useLayoutEffect } from 'react'
+import { useState, useRef, useCallback, useEffect, useImperativeHandle } from 'react'
 
 
-import { predict } from '../../model/model'
+import { canAllocateCanvas, canvasImageError } from '../../services/canvasImage'
 
 const HISTORY_LIMIT = 20;
-const CANVAS_SIZE = 800;
+
 
 function captureLayer(ctx) {
   return ctx.getImageData(0, 0, ctx.canvas.width, ctx.canvas.height);
@@ -48,8 +48,21 @@ function fillConnectedPixels(composite, destination, x, y, color) {
   return changed;
 }
 
-function DrawCanvas({ ref, toolInfo, layers, strokeSize }) {
-  const [scale, setScale] = useState(Math.min(window.innerWidth / 800*0.8, window.innerHeight / 800*0.8));
+function DrawCanvas({
+  canvasApi, toolInfo, strokeSize, artwork, activeLayer, layers: layerList, ready, locked, readOnly,
+  canDraw, getLayerCanvas, compose, onStrokeStart, onStrokeEnd, onRenderError, onInputError, changeLayers
+}) {
+  const { width: canvasWidth, height: canvasHeight, backgroundColor } = artwork;
+  const allocated = canAllocateCanvas(canvasWidth, canvasHeight);
+  const activeId = activeLayer?.layerId;
+  const getLayer = (id = activeId, allocate = false) => {
+    const layer = layerList.find(item => item.layerId === id);
+    if (!layer) return null;
+    const data = getLayerCanvas(id, allocate)?.getContext('2d');
+    if (data?.isContextLost?.()) throw canvasImageError('Layer canvas context lost');
+    return { ...layer, data };
+  };
+  const [scale, setScale] = useState(() => Math.min(window.innerWidth / canvasWidth * 0.8, window.innerHeight / canvasHeight * 0.8, 5));
   const [pos, setPos] = useState({ x: 0, y: 0 });
   const pointer = useRef({ x: 0, y: 0 }).current;
 
@@ -60,54 +73,70 @@ function DrawCanvas({ ref, toolInfo, layers, strokeSize }) {
   const [selection, setSelection] = useState(null);
   const history = useRef({ undo: [], redo: [], revision: 0 });
 
-  const layerList = layers.layers;
-  const { updateLayer } = layers;
-  const selectedArea = toolInfo.tool === 'select' && selection?.layerId === layers.activeId &&
-    layers.getLayer()?.visible ? selection : null;
+  const selectedArea = toolInfo.tool === 'select' && selection?.layerId === activeId &&
+    activeLayer?.visible ? selection : null;
   const drawLayers = useCallback(() => {
+    const drag = selectionDrag.current;
+    compose(drag?.preview ? { layerId: drag.layerId, canvas: drag.preview.canvas } : undefined);
+  }, [compose]);
+
+  function commitEdit(layerId, pixels) {
+    recordEdit(layerId, pixels);
+    onStrokeEnd(layerId, true);
+  }
+
+  async function classifyLayer(layerId) {
+    const revision = history.current.revision;
     const target = canvas.current;
     if (!target) return;
-
-    const ctx = target.getContext('2d');
-    ctx.clearRect(0, 0, target.width, target.height);
-    ctx.save();
-    // 목록 위쪽의 레이어가 앞에 보이도록 아래에서부터 합성한다.
-    for (let i = layerList.length - 1; i >= 0; i--) {
-      const currentLayer = layerList[i];
-      if (!currentLayer.visible) continue;
-      ctx.globalAlpha = currentLayer.opacity;
-      const drag = selectionDrag.current;
-      const source = drag?.layer === currentLayer.data && drag.preview
-        ? drag.preview.canvas : currentLayer.data.canvas;
-      ctx.drawImage(source, 0, 0);
+    // Snapshot before loading the model so later canvas edits cannot change the input.
+    try {
+      const snapshot = new OffscreenCanvas(224, 224);
+      const ctx = snapshot.getContext('2d');
+      ctx.fillStyle = 'white';
+      ctx.fillRect(0, 0, 224, 224);
+      const scale = 224 / Math.max(target.width, target.height);
+      const width = target.width * scale;
+      const height = target.height * scale;
+      ctx.drawImage(target, (224 - width) / 2, (224 - height) / 2, width, height);
+      const { predict } = await import('../../model/model');
+      const prediction = await predict(snapshot);
+      if (revision !== history.current.revision || !canDraw()) return;
+      const category = ["명암", "선화", "채색"][prediction];
+      if (category) changeLayers(current => {
+        if (!current.some(layer => layer.layerId === layerId && layer.category !== category)) return;
+        return { layers: current.map(layer => layer.layerId === layerId
+          ? { ...layer, name: `(${category})`, category } : layer) };
+      });
+    } catch (error) {
+      console.error('레이어 자동 분류 실패', error);
     }
-    ctx.restore();
-  }, [layerList]);
-
-  useLayoutEffect(() => {
-    drawLayers();
-  }, [drawLayers]);
+  }
 
   function recordEdit(layerId, pixels) {
     const state = history.current;
-    state.undo.push({ layerId, pixels });
-    if (state.undo.length > HISTORY_LIMIT) state.undo.shift();
+    state.undo.push({ layerId, pixels, canvas: getLayerCanvas(layerId, false) });
+    const limit = Math.max(1, Math.min(HISTORY_LIMIT, Math.floor(64 * 1024 * 1024 / pixels.data.byteLength)));
+    if (state.undo.length > limit) state.undo.shift();
     state.redo.length = 0;
   }
 
-  useImperativeHandle(ref, () => ({
+  useImperativeHandle(canvasApi, () => ({
+    getCanvas: () => canvas.current,
+    finishStroke,
     getSelection() {
       if (!selectedArea || selectionDrag.current) return null;
       const { layerId, x, y, width, height } = selectedArea;
-      return { layerId, x, y, pixels: layers.getLayer(layerId).data.getImageData(x, y, width, height) };
+      const ctx = getLayer(layerId)?.data;
+      return ctx ? { layerId, x, y, pixels: ctx.getImageData(x, y, width, height) } : null;
     },
-    fillAt(clientX, clientY, hex) {
+    fillAt: (clientX, clientY, hex) => guardInput(() => {
       const target = canvas.current;
-      if (!target || activeStroke.current || selectionDrag.current ||
+      if (!canDraw() || !target || activeStroke.current || selectionDrag.current ||
           document.elementFromPoint(clientX, clientY) !== target) return;
 
-      const layer = layers.getLayer();
-      if (!layer?.visible) return;
+      if (!activeLayer?.visible) return;
+      const layer = getLayer(activeId, true);
       const rect = target.getBoundingClientRect();
       const x = Math.floor((clientX - rect.left) * target.width / rect.width);
       const y = Math.floor((clientY - rect.top) * target.height / rect.height);
@@ -121,13 +150,14 @@ function DrawCanvas({ ref, toolInfo, layers, strokeSize }) {
       const color = [rgb >> 16, (rgb >> 8) & 255, rgb & 255, 255];
       if (!fillConnectedPixels(composite, pixels, x, y, color)) return;
 
-      recordEdit(layer.layerId, captureLayer(layer.data));
+      const before = captureLayer(layer.data);
       history.current.revision++;
       setSelection(null);
       layer.data.putImageData(pixels, 0, 0);
       drawLayers();
-      updateLayer(layer.layerId);
-    }
+      commitEdit(layer.layerId, before);
+      void classifyLayer(layer.layerId);
+    })
   }));
 
   useEffect(() => {
@@ -138,7 +168,7 @@ function DrawCanvas({ ref, toolInfo, layers, strokeSize }) {
       if (event.target instanceof HTMLElement &&
           (event.target.isContentEditable ||
            event.target.matches('textarea, input:is(:not([type]), [type="text"], [type="search"], [type="email"], [type="url"], [type="tel"], [type="password"], [type="number"])'))) return;
-      if (activeStroke.current || selectionDrag.current) return;
+      if (!canDraw() || activeStroke.current || selectionDrag.current) return;
 
       const state = history.current;
       const from = event.shiftKey ? state.redo : state.undo;
@@ -146,24 +176,26 @@ function DrawCanvas({ ref, toolInfo, layers, strokeSize }) {
       event.preventDefault();
 
       while (from.length > 0) {
-        const entry = from.pop();
-        const layer = layerList.find(layer => layer.layerId === entry.layerId);
-        if (!layer) continue;
+        const entry = from.at(-1);
+        const layer = getLayer(entry.layerId);
+        if (!layer?.data || layer.data.canvas !== entry.canvas) { from.pop(); continue; }
 
         const currentPixels = captureLayer(layer.data);
         layer.data.putImageData(entry.pixels, 0, 0);
-        to.push({ layerId: entry.layerId, pixels: currentPixels });
+        from.pop();
+        to.push({ ...entry, pixels: currentPixels });
         state.revision++;
         setSelection(null);
         drawLayers();
-        updateLayer(entry.layerId);
+        onStrokeEnd(entry.layerId, true);
         break;
       }
     };
 
-    window.addEventListener('keydown', handleHistoryShortcut);
-    return () => window.removeEventListener('keydown', handleHistoryShortcut);
-  }, [drawLayers, layerList, updateLayer]);
+    const handleKey = event => guardInput(() => handleHistoryShortcut(event));
+    window.addEventListener('keydown', handleKey);
+    return () => window.removeEventListener('keydown', handleKey);
+  });
 
   function selectionPoint(event, layer) {
     const target = canvas.current;
@@ -179,7 +211,7 @@ function DrawCanvas({ ref, toolInfo, layers, strokeSize }) {
   }
 
   function startSelection(event, layer) {
-    if (event.target !== canvas.current || !layer?.visible) {
+    if (event.target !== canvas.current || !layer?.visible || !layer.data) {
       setSelection(null);
       return;
     }
@@ -231,36 +263,38 @@ function DrawCanvas({ ref, toolInfo, layers, strokeSize }) {
   }
 
   function finishSelection(event, drag) {
-    const layer = layers.getLayer(drag.layerId);
-    const valid = event.type === 'pointerup' && toolInfo.tool === 'select' &&
-      layers.activeId === drag.layerId && layer?.visible && layer.data === drag.layer;
+    const layer = getLayer(drag.layerId);
+    const valid = canDraw() && event.type === 'pointerup' && toolInfo.tool === 'select' &&
+      activeId === drag.layerId && layer?.visible && layer.data === drag.layer;
     const area = valid ? updateSelection(event, drag) : drag.original ?? null;
     selectionDrag.current = null;
     setSelection(area);
 
     if (valid && drag.original && (area.x !== drag.original.x || area.y !== drag.original.y)) {
-      recordEdit(drag.layerId, captureLayer(drag.layer));
+      const before = captureLayer(drag.layer);
       history.current.revision++;
       drag.layer.putImageData(captureLayer(drag.preview), 0, 0);
-      updateLayer(drag.layerId);
+      commitEdit(drag.layerId, before);
     }
     if (drag.preview) drawLayers();
   }
 
-  const updatePointer = e => {
-    pointer.x=(e.clientX-window.innerWidth/2-pos.x)/scale;
-    pointer.y=(e.clientY-window.innerHeight/2-pos.y)/scale;
-  }
-  // ---------------------
+  const updatePointer = event => {
+    const rect = canvas.current.getBoundingClientRect();
+    pointer.x = (event.clientX - rect.left) * canvasWidth / rect.width;
+    pointer.y = (event.clientY - rect.top) * canvasHeight / rect.height;
+  };
 
   const onPointerDown = e => {
     // ------ 추가-2 ------
-    if(e.button !== 0 || activeStroke.current || selectionDrag.current) return;
-    const layer = layers.getLayer();
+    if (!canDraw() || !allocated || e.button !== 0 || activeStroke.current ||
+        selectionDrag.current || !activeLayer?.visible || e.target !== canvas.current) return;
+    const layer = getLayer(activeId, toolInfo.tool === 'pen');
     if (toolInfo.tool === 'select') {
       startSelection(e, layer);
       return;
     }
+    if (!layer?.data) return;
     setSelection(null);
     const layerCanvas = layer.data;
     const pixels = captureLayer(layerCanvas);
@@ -271,8 +305,10 @@ function DrawCanvas({ ref, toolInfo, layers, strokeSize }) {
       pointerId: e.pointerId,
       layerId: layer.layerId,
       layerCanvas,
-      pixels
+      pixels, target: e.currentTarget
     };
+    onStrokeStart();
+    onInputError(null);
 
     layerCanvas.globalCompositeOperation = toolInfo.tool === 'eraser' ? 'destination-out' : 'source-over';
     layerCanvas.lineWidth = strokeSize;
@@ -281,7 +317,7 @@ function DrawCanvas({ ref, toolInfo, layers, strokeSize }) {
     layerCanvas.fillStyle = toolInfo.color;
 
     layerCanvas.beginPath();
-    layerCanvas.arc(pointer.x+400,pointer.y+400,strokeSize / 2,0,Math.PI*2);
+    layerCanvas.arc(pointer.x,pointer.y,strokeSize / 2,0,Math.PI*2);
     layerCanvas.fill();
     drawLayers()
     // ---------------------
@@ -301,66 +337,101 @@ function DrawCanvas({ ref, toolInfo, layers, strokeSize }) {
     updatePointer(e);
 
     if (!stroke) return;
+    if (!canDraw()) { finishStroke(); return; }
 
     const { layerCanvas } = stroke;
     layerCanvas.beginPath();
-    layerCanvas.moveTo(x+400,y+400);
-    layerCanvas.lineTo(pointer.x+400,pointer.y+400);
+    layerCanvas.moveTo(x,y);
+    layerCanvas.lineTo(pointer.x,pointer.y);
     layerCanvas.stroke();
     drawLayers()
     // ---------------------
   }
 
-  const onPointerUp = async e => {
+  function finishStroke() {
     const drag = selectionDrag.current;
     if (drag) {
-      if (drag.pointerId === e.pointerId) finishSelection(e, drag);
-      return;
+      selectionDrag.current = null;
+      setSelection(drag.original ?? null);
+      if (drag.preview) compose();
     }
     const stroke = activeStroke.current;
-    if (!stroke || stroke.pointerId !== e.pointerId) return;
+    if (!stroke) return;
     activeStroke.current = null;
-
-    const layer = layers.getLayer(stroke.layerId);
-    if (!layer) return;
-
-    const state = history.current;
-    recordEdit(stroke.layerId, stroke.pixels);
-    updateLayer(stroke.layerId);
-    const revision = state.revision;
-
-    let data=await predict(canvas.current)
-    if (revision !== state.revision) return;
-    const category = ["명암", "선화", "채색"][data];
-    if (category) updateLayer(stroke.layerId, { name: `(${category})`, category });
+    if (stroke.target.hasPointerCapture(stroke.pointerId)) stroke.target.releasePointerCapture(stroke.pointerId);
+    let changed = true;
+    try {
+      const after = captureLayer(stroke.layerCanvas);
+      changed = after.data.some((value, index) => value !== stroke.pixels.data[index]);
+    } catch (error) {
+      onStrokeEnd(stroke.layerId, true);
+      onRenderError(error);
+      return;
+    }
+    if (changed) {
+      recordEdit(stroke.layerId, stroke.pixels);
+      void classifyLayer(stroke.layerId);
+    }
+    onStrokeEnd(stroke.layerId, changed);
   }
+
+  const onPointerUp = event => {
+    const drag = selectionDrag.current;
+    if (drag) {
+      if (drag.pointerId === event.pointerId) finishSelection(event, drag);
+      return;
+    }
+    if (activeStroke.current?.pointerId === event.pointerId) finishStroke();
+  };
+
+  function guardInput(action) {
+    try {
+      action();
+    } catch (error) {
+      finishStroke();
+      if (error.code === 'canvas/layer-capacity') onInputError(error);
+      else onRenderError(error);
+    }
+  }
+
+  useEffect(() => {
+    const target = canvas.current;
+    const onContextLost = () => {
+      finishStroke();
+      onRenderError(canvasImageError('Drawing canvas context lost'));
+    };
+    target.addEventListener('contextlost', onContextLost);
+    return () => target.removeEventListener('contextlost', onContextLost);
+  });
 
   return (
     <div className="drawarea" onWheel={e => {
+      if (!ready || locked) return;
+      updatePointer(e);
       const delta = e.deltaY > 0 ? scale/20 : -scale/20;
       let scaleValue = Math.min(Math.max(scale + delta, 0.1), 5);
-      console.log(pointer.x)
       setPos({
-        x: pos.x + pointer.x*(scale-scaleValue),
-        y: pos.y + pointer.y*(scale-scaleValue)
+        x: pos.x + (pointer.x - canvasWidth / 2)*(scale-scaleValue),
+        y: pos.y + (pointer.y - canvasHeight / 2)*(scale-scaleValue)
       });
       setScale(scaleValue);
     }}
-    onPointerDown={onPointerDown}
-    onPointerMove={onPointerMove}
-    onPointerUp={onPointerUp}
-    onPointerCancel={onPointerUp}
-    onLostPointerCapture={onPointerUp}
+    onPointerDown={event => guardInput(() => onPointerDown(event))}
+    onPointerMove={event => guardInput(() => onPointerMove(event))}
+    onPointerUp={event => guardInput(() => onPointerUp(event))}
+    onPointerCancel={event => guardInput(() => onPointerUp(event))}
+    onLostPointerCapture={event => guardInput(() => onPointerUp(event))}
     >
-      <canvas ref={canvas} className="drawcanvas" width={CANVAS_SIZE} height={CANVAS_SIZE}
-        style={{transform: `translate(calc(-50% + ${pos.x}px), calc(-50% + ${pos.y}px))scale(${scale})`}}
+      <canvas ref={canvas} className="drawcanvas" width={allocated ? canvasWidth : 1} height={allocated ? canvasHeight : 1}
+        data-ready={ready && !locked} data-read-only={readOnly} aria-busy={!ready || locked}
+        style={{background: backgroundColor, transform: `translate(calc(-50% + ${pos.x}px), calc(-50% + ${pos.y}px))scale(${scale})`}}
       ></canvas>
       {selectedArea && (
         <div
           className="canvas-selection"
           style={{
-            left: `calc(50% + ${pos.x + (selectedArea.x - CANVAS_SIZE / 2) * scale}px)`,
-            top: `calc(50% + ${pos.y + (selectedArea.y - CANVAS_SIZE / 2) * scale}px)`,
+            left: `calc(50% + ${pos.x + (selectedArea.x - canvasWidth / 2) * scale}px)`,
+            top: `calc(50% + ${pos.y + (selectedArea.y - canvasHeight / 2) * scale}px)`,
             width: selectedArea.width * scale,
             height: selectedArea.height * scale
           }}

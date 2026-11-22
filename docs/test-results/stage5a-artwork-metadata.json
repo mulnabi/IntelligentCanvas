@@ -1,0 +1,110 @@
+{
+  "results": [
+    {
+      "name": "signed_out_UI_and_all_repository_operations_denied",
+      "status": "passed"
+    },
+    {
+      "name": "existing_signup_and_Firestore_profile_for_A",
+      "status": "passed"
+    },
+    {
+      "name": "invalid_dimensions_rejected_by_UI_and_repository",
+      "status": "passed"
+    },
+    {
+      "name": "write_failure_retains_form_and_creates_no_record",
+      "status": "passed"
+    },
+    {
+      "name": "create_A1_with_double_submit_protection",
+      "status": "passed"
+    },
+    {
+      "name": "create_A2_and_list_two_owned_artworks",
+      "status": "passed"
+    },
+    {
+      "name": "title_substring_normalized_search_and_empty_result",
+      "status": "passed"
+    },
+    {
+      "name": "rename_updates_title_search_and_updatedAt_only",
+      "status": "passed"
+    },
+    {
+      "name": "created_updated_and_name_sort_apply_to_stored_records",
+      "status": "passed"
+    },
+    {
+      "name": "delete_cancel_keeps_identical_record",
+      "status": "passed"
+    },
+    {
+      "name": "delete_marks_tombstone_and_denies_reopen",
+      "status": "passed"
+    },
+    {
+      "name": "refresh_and_DB_reopen_preserve_metadata",
+      "status": "passed"
+    },
+    {
+      "name": "query_error_and_retry",
+      "status": "passed"
+    },
+    {
+      "name": "card_opens_correct_ID_metadata_and_persistent_canvas",
+      "status": "passed"
+    },
+    {
+      "name": "missing_ID_and_legacy_drawing_route",
+      "status": "passed"
+    },
+    {
+      "name": "logout_clears_list_without_deleting_local_data",
+      "status": "passed"
+    },
+    {
+      "name": "B_same_nickname_signup_sees_only_B1",
+      "status": "passed"
+    },
+    {
+      "name": "B_cannot_open_modify_delete_or_spoof_A_UID",
+      "status": "passed"
+    },
+    {
+      "name": "logout_hides_open_drawing_and_login_errors_still_work",
+      "status": "passed"
+    },
+    {
+      "name": "A_relogin_restores_A1_A2_and_hides_B1",
+      "status": "passed"
+    },
+    {
+      "name": "live_updates_from_another_tab_and_opened_deleted_artwork",
+      "status": "passed"
+    },
+    {
+      "name": "default_title_dimensions_and_expected_tables",
+      "status": "passed"
+    },
+    {
+      "name": "mobile_existing_layout_and_new_menu",
+      "status": "passed"
+    },
+    {
+      "name": "no_uncaught_errors_no_production_or_artwork_server_writes",
+      "status": "passed"
+    }
+  ],
+  "cleanup": [
+    {
+      "status": "removed"
+    },
+    {
+      "status": "removed"
+    }
+  ],
+  "pageErrors": [],
+  "forbiddenRequests": []
+}

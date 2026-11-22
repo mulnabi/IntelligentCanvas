@@ -1,0 +1,75 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /users/{uid} {
+      function isProfileOwner() {
+        return request.auth != null && request.auth.uid == uid;
+      }
+
+      function validProfile() {
+        let data = request.resource.data;
+        return data.keys().hasAll(['uid', 'nickname', 'createdAt', 'updatedAt', 'schemaVersion'])
+          && data.keys().hasOnly(['uid', 'nickname', 'createdAt', 'updatedAt', 'schemaVersion'])
+          && data.uid == uid
+          && data.nickname is string
+          && data.nickname.size() > 0
+          && data.nickname.size() <= 80
+          && data.createdAt is timestamp
+          && data.updatedAt == request.time
+          && data.schemaVersion == 1;
+      }
+
+      allow get: if isProfileOwner();
+      allow create: if isProfileOwner() && validProfile()
+        && request.resource.data.createdAt == request.time;
+      allow update: if isProfileOwner() && validProfile()
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['nickname', 'updatedAt']);
+      allow list, delete: if false;
+    }
+
+    // 1단계 Emulator 연결 검증 전용. 운영 배포용 권한 정책이 아니다.
+    match /users/{uid}/connectionTests/{testId} {
+      function isOwner() {
+        return request.auth != null && request.auth.uid == uid;
+      }
+
+      function isValidTestDocument() {
+        let data = request.resource.data;
+        return data.keys().hasAll(['ownerUid', 'runId', 'environment', 'message', 'createdAt'])
+          && data.keys().hasOnly(['ownerUid', 'runId', 'environment', 'message', 'createdAt'])
+          && data.ownerUid == uid
+          && data.runId == testId
+          && data.environment == 'emulator'
+          && data.message is string
+          && data.message.size() <= 100
+          && data.createdAt == request.time;
+      }
+
+      allow get, delete: if isOwner();
+      allow create: if isOwner() && isValidTestDocument();
+      allow list, update: if false;
+    }
+
+    match /users/{uid}/artworks/{artworkId} {
+      function isArtworkOwner() {
+        return request.auth != null && request.auth.uid == uid;
+      }
+
+      allow get: if isArtworkOwner() && (resource == null || resource.data.ownerUid == uid);
+      allow list: if isArtworkOwner() && resource.data.ownerUid == uid;
+      allow write: if false;
+
+      match /layers/{layerId} {
+        allow get, list: if isArtworkOwner()
+          && get(/databases/$(database)/documents/users/$(uid)/artworks/$(artworkId)).data.ownerUid == uid;
+        allow write: if false;
+      }
+    }
+
+    // 세션 토큰, 수정 이력, 요청 영수증은 필요한 응답을 서버에서 별도로 제공한다.
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

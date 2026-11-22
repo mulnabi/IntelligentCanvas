@@ -1,0 +1,10 @@
+rules_version = '2';
+
+service firebase.storage {
+  match /b/{bucket}/o {
+    // 원본 파일 접근은 인증과 소유권을 검증하는 서버 함수에서 이루어진다.
+    match /{path=**} {
+      allow read, write: if false;
+    }
+  }
+}

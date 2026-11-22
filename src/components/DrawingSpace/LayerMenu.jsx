@@ -7,7 +7,7 @@ function LayerMenu(props) {
 
   return (
     <>
-      <button className="layer-toggle" onClick={() => setOpen(true)}>
+      <button className="layer-toggle" aria-label="레이어 패널 열기" onClick={() => setOpen(true)}>
         <svg viewBox="0 0 32 32"><path d="M16 5l12 6-12 6-12-6 12-6ZM4 16l12 6 12-6M4 21l12 6 12-6"/></svg>
       </button>
       {open && (

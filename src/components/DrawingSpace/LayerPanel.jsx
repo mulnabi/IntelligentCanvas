@@ -15,23 +15,24 @@ const Icon = ({ name }) => (
   <svg viewBox="0 0 32 32"><path d={icons[name]} /></svg>
 )
 
-function LayerThumbnail({ source, pixelRevision }) {
+function LayerThumbnail({ layerId, pixelRevision, getLayerPreview }) {
   const thumbnail = useRef(null)
-
   useLayoutEffect(() => {
-    const target = thumbnail.current
-    const ctx = target.getContext('2d')
-    ctx.clearRect(0, 0, target.width, target.height)
-    const scale = Math.min(target.width / source.width, target.height / source.height)
+    const canvas = thumbnail.current
+    const ctx = canvas.getContext('2d')
+    ctx.clearRect(0, 0, canvas.width, canvas.height)
+    const source = getLayerPreview(layerId)
+    if (!source?.width || !source.height) return
+    const scale = Math.min(canvas.width / source.width, canvas.height / source.height)
     const width = source.width * scale
     const height = source.height * scale
-    ctx.drawImage(source, (target.width - width) / 2, (target.height - height) / 2, width, height)
-  }, [source, pixelRevision])
+    ctx.drawImage(source, (canvas.width - width) / 2, (canvas.height - height) / 2, width, height)
+  }, [layerId, pixelRevision, getLayerPreview])
 
   return <canvas ref={thumbnail} className="layer-thumb" width="80" height="80" aria-hidden="true" />
 }
 
-function LayerPanel({ layers, activeId, select, toggle, setOpacity, add, remove, move, Close }) {
+function LayerPanel({ layers, activeId, select, toggle, setOpacity, rename, add, remove, move, disabled, getLayerPreview, Close }) {
   const [drag, setDrag] = useState(null) 
   const dragged = useRef(false)          // 끌고 난 직후 클릭 통제
 
@@ -47,7 +48,7 @@ function LayerPanel({ layers, activeId, select, toggle, setOpacity, add, remove,
 
   const dragStart = (e, id, index) => {
     dragged.current = false
-    if (layers.length < 2) return
+    if (disabled || e.button !== 0 || layers.length < 2) return
     if (e.target.closest('.layer-eye')) return
     if (e.pointerType !== 'mouse' && !e.target.closest('.layer-grip')) return
     setDrag({ id, from: index, startY: e.clientY, dy: 0, moving: false })
@@ -71,17 +72,12 @@ function LayerPanel({ layers, activeId, select, toggle, setOpacity, add, remove,
   setTimeout(() => { dragged.current = false }, 0) 
 }
 
-// 
-const dragLeave = () => {
-  if (drag && !drag.moving) setDrag(null)
-}
-
   return (
     <section className="layer-panel">
       <header className="layer-head">
         <h2>레이어</h2>
         <span className="layer-count">{layers.length}</span>
-        <button className="layer-add" title="레이어 추가" onClick={add}><Icon name="plus" /></button>
+        <button className="layer-add" title="레이어 추가" disabled={disabled} onClick={add}><Icon name="plus" /></button>
         <button className="layer-close" title="닫기" onClick={Close}><Icon name="close" /></button>
       </header>
 
@@ -112,12 +108,12 @@ const dragLeave = () => {
               onPointerUp={dragEnd}
               onPointerCancel={() => setDrag(null)}>
               <span className="layer-grip"><Icon name="grip" /></span>
-              <button className="layer-select" onClick={() => { if (!dragged.current) select(id) }}>
-                <LayerThumbnail source={layer.data.canvas} pixelRevision={layer.pixelRevision} />
+              <button className="layer-select" aria-pressed={id === activeId} onClick={() => { if (!dragged.current) select(id) }}>
+                <LayerThumbnail layerId={id} pixelRevision={layer.pixelRevision} getLayerPreview={getLayerPreview} />
                 <span className="layer-name">{layer.name}</span>
                 {layer.category && <span className="layer-tag">{layer.category}</span>}
               </button>
-              <button className="layer-eye" title="보이기/숨기기" onClick={() => toggle(id)}>
+              <button className="layer-eye" title="보이기/숨기기" disabled={disabled} aria-pressed={layer.visible} onClick={() => toggle(id)}>
                 <Icon name={layer.visible ? 'eye' : 'eyeOff'} />
               </button>
             </li>
@@ -128,11 +124,15 @@ const dragLeave = () => {
       <div className="layer-bottom">
         <label className="layer-opacity">
           불투명도
-          <input type="range" min="0" max="100" value={opacity}
+          <input type="range" min="0" max="100" value={opacity} disabled={disabled}
             onChange={e => setOpacity(activeId, e.target.value / 100)} />
           <span>{opacity}%</span>
         </label>
-        <button className="layer-delete" disabled={layers.length <= 1} onClick={() => remove(activeId)}>
+        <button disabled={disabled} onClick={() => {
+          const name = window.prompt('레이어 이름 (1~80자)', active.name)
+          if (name !== null) rename(activeId, name)
+        }}>이름 변경</button>
+        <button className="layer-delete" disabled={disabled || layers.length <= 1} onClick={() => remove(activeId)}>
           레이어 삭제
         </button>
       </div>

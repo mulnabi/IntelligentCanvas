@@ -1,0 +1,148 @@
+{
+  "results": [
+    {
+      "name": "v1_metadata_and_v2_PNG_fixtures_survive_v3_upgrade",
+      "status": "passed"
+    },
+    {
+      "name": "v2_migration_rolls_back_and_retry_restores_identical_pixels_once",
+      "status": "passed"
+    },
+    {
+      "name": "existing_login_and_profile_survive_upgrade",
+      "status": "passed"
+    },
+    {
+      "name": "new_1024x768_artwork_opens_blank_at_actual_resolution",
+      "status": "passed"
+    },
+    {
+      "name": "pen_autosave_stores_binary_PNG_and_atomic_updatedAt",
+      "status": "passed"
+    },
+    {
+      "name": "list_reopen_and_F5_restore_identical_RGBA_pixels",
+      "status": "passed"
+    },
+    {
+      "name": "restore_blocks_pointer_input_and_releases_object_URL",
+      "status": "passed"
+    },
+    {
+      "name": "additional_stroke_and_eraser_persist_exactly",
+      "status": "passed"
+    },
+    {
+      "name": "zoom_changes_display_only_and_preserves_pixel_coordinates",
+      "status": "passed"
+    },
+    {
+      "name": "color_picker_and_non_drawing_rerenders_preserve_pixels",
+      "status": "passed"
+    },
+    {
+      "name": "selection_and_eraser_on_empty_pixels_do_not_create_saves",
+      "status": "passed"
+    },
+    {
+      "name": "queued_save_keeps_edits_made_during_PNG_encoding",
+      "status": "passed"
+    },
+    {
+      "name": "pointer_release_outside_canvas_and_pointer_cancel_save",
+      "status": "passed"
+    },
+    {
+      "name": "toBlob_failure_is_not_success_and_retry_preserves_edits",
+      "status": "passed"
+    },
+    {
+      "name": "transaction_failure_rolls_back_PNG_and_metadata_then_retries",
+      "status": "passed"
+    },
+    {
+      "name": "immediate_list_navigation_flushes_pending_changes",
+      "status": "passed"
+    },
+    {
+      "name": "failed_navigation_keeps_pixels_until_save_retry_succeeds",
+      "status": "passed"
+    },
+    {
+      "name": "browser_back_waits_for_pending_save",
+      "status": "passed"
+    },
+    {
+      "name": "logout_flushes_pending_stroke_before_changing_UID",
+      "status": "passed"
+    },
+    {
+      "name": "separate_artworks_start_blank_and_do_not_mix_pixels",
+      "status": "passed"
+    },
+    {
+      "name": "corrupt_PNG_restore_blocks_drawing_and_does_not_overwrite",
+      "status": "passed"
+    },
+    {
+      "name": "oversized_canvas_is_not_allocated_and_metadata_is_preserved",
+      "status": "passed"
+    },
+    {
+      "name": "soft_delete_preserves_PNG_but_blocks_app_content_access",
+      "status": "passed"
+    },
+    {
+      "name": "logout_clears_pixels_without_deleting_local_content",
+      "status": "passed"
+    },
+    {
+      "name": "B_signup_same_nickname_and_own_PNG_are_independent",
+      "status": "passed"
+    },
+    {
+      "name": "other_UID_direct_route_and_forged_content_API_are_denied",
+      "status": "passed"
+    },
+    {
+      "name": "A_relogin_and_refresh_restore_own_pixels_again",
+      "status": "passed"
+    },
+    {
+      "name": "two_layer_pixels_are_independent_and_eraser_reveals_lower_stroke",
+      "status": "passed"
+    },
+    {
+      "name": "visibility_opacity_and_order_persist_without_reencoding_originals",
+      "status": "passed"
+    },
+    {
+      "name": "stroke_target_stays_fixed_and_parallel_layer_edits_save_latest_pixels",
+      "status": "passed"
+    },
+    {
+      "name": "deletion_during_PNG_encoding_removes_metadata_and_content_permanently",
+      "status": "passed"
+    },
+    {
+      "name": "failed_layer_settings_transaction_preserves_the_committed_order_and_PNG",
+      "status": "passed"
+    },
+    {
+      "name": "no_uncaught_errors_or_production_artwork_requests",
+      "status": "passed"
+    }
+  ],
+  "cleanup": [
+    {
+      "status": "removed"
+    },
+    {
+      "status": "removed"
+    }
+  ],
+  "pageErrors": [],
+  "forbiddenRequests": [],
+  "networkErrors": [],
+  "consoleErrors": []
+}

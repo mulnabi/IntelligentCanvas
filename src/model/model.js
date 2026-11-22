@@ -1,8 +1,10 @@
 import * as ort from 'onnxruntime-web'
+import encoderUrl from './vit_encoder.onnx?url'
+import headUrl from './vit_head.onnx?url'
 
-const encoder = await ort.InferenceSession.create('./src/model/vit_encoder.onnx')
+const encoder = await ort.InferenceSession.create(encoderUrl)
 
-const head = await ort.InferenceSession.create('./src/model/vit_head.onnx')
+const head = await ort.InferenceSession.create(headUrl)
 
 
 function imageToTensor(canvas) {
