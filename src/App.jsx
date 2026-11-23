@@ -1,4 +1,4 @@
-import { createBrowserRouter, RouterProvider, Routes, Route, Navigate, useNavigate } from 'react-router'
+import { createBrowserRouter, createHashRouter, RouterProvider, Routes, Route, Navigate, useNavigate } from 'react-router'
 
 import './App.css'
 
@@ -56,6 +56,7 @@ function AppRoutes() {
 }
 
 // 기존 경로/화면을 유지하면서 useBlocker로 미저장 상태의 내부 이동을 기다린다.
-const router = createBrowserRouter([{ path: '*', element: <AppRoutes/> }])
+const createRouter = import.meta.env.VITE_GITHUB_PAGES === 'true' ? createHashRouter : createBrowserRouter
+const router = createRouter([{ path: '*', element: <AppRoutes/> }])
 
 export default function App() { return <RouterProvider router={router}/> }

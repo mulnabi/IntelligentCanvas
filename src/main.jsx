@@ -1,7 +1,6 @@
 import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import './index.css'
-import App from './App.jsx'
 
 // 개발자 콘솔에서 명시적으로 호출할 때만 테스트 모듈을 불러온다.
 if (import.meta.env.DEV) {
@@ -19,8 +18,18 @@ if (import.meta.env.DEV) {
   }
 }
 
-createRoot(document.getElementById('root')).render(
-  <StrictMode>
-    <App />
-  </StrictMode>,
-)
+const root = createRoot(document.getElementById('root'))
+
+async function startApp() {
+  try {
+    const { default: App } = await import('./App.jsx')
+    root.render(<StrictMode><App /></StrictMode>)
+  } catch (error) {
+    console.error(error)
+    const message = error instanceof Error && error.message.startsWith('[Firebase 설정]')
+      ? error.message : '앱을 시작하지 못했습니다. 페이지를 새로고침해 주세요.'
+    root.render(<p className="no-result" role="alert">{message}</p>)
+  }
+}
+
+void startApp()
