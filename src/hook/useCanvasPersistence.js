@@ -153,6 +153,11 @@ export function useCanvasPersistence({ uid, artworkId, width, height }, canvasAp
           renderer.remove(change.removedId)
         }
         session.layers = change.layers.map((layer, sortOrder) => ({ ...layer, sortOrder }))
+        for (const layerId of change.changedPixelIds ?? []) {
+          const pixelRevision = ++session.revision
+          session.dirtyPixels.set(layerId, pixelRevision)
+          session.layers = session.layers.map(layer => layer.layerId === layerId ? { ...layer, pixelRevision } : layer)
+        }
         session.activeId = change.activeId ?? session.activeId
         session.metadataRevision = ++session.revision
         compose()

@@ -25,7 +25,32 @@
   pointer-events: none;
 }
 
-.brush-size {
+.canvas-action-prompt {
+  position: fixed;
+  bottom: max(12px, env(safe-area-inset-bottom));
+  left: 50%;
+  transform: translateX(-50%);
+  width: max-content;
+  max-width: calc(100% - 24px);
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border-radius: 10px;
+  background: #fff;
+  box-shadow: 0 1px 5px #0004;
+}
+
+.canvas-action-prompt p {
+  margin: 0;
+}
+
+.canvas-action-prompt button {
+  flex: none;
+}
+
+.brush-controls {
   position: fixed;
   top: max(12px, env(safe-area-inset-top));
   left: 50%;
@@ -43,14 +68,25 @@
   white-space: nowrap;
 }
 
-.brush-size input {
-  width: clamp(72px, 22vw, 180px);
+.brush-setting {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.brush-opacity {
+  padding-left: 8px;
+  border-left: 1px solid #d5d5d5;
+}
+
+.brush-setting input {
+  width: clamp(48px, 14vw, 150px);
   height: 24px;
   margin: 0;
 }
 
-.brush-size span:last-child {
-  min-width: 6ch;
+.brush-setting span:last-child {
+  min-width: 5ch;
   text-align: right;
   font-variant-numeric: tabular-nums;
 }

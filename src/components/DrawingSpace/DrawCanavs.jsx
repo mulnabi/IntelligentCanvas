@@ -2,8 +2,10 @@ import { useState, useRef, useCallback, useEffect, useImperativeHandle } from 'r
 
 
 import { canAllocateCanvas, canvasImageError } from '../../services/canvasImage'
+import { createLayer } from '../../repositories/layerRepository'
 
 const HISTORY_LIMIT = 20;
+const SELECTION_TOOLS = ['도형', '글자', '대칭'];
 
 
 function captureLayer(ctx) {
@@ -49,7 +51,7 @@ function fillConnectedPixels(composite, destination, x, y, color) {
 }
 
 function DrawCanvas({
-  canvasApi, toolInfo, strokeSize, artwork, activeLayer, layers: layerList, ready, locked, readOnly,
+  canvasApi, toolInfo, strokeSize, penOpacity = 1, artwork, activeLayer, layers: layerList, ready, locked, readOnly,
   canDraw, getLayerCanvas, compose, onStrokeStart, onStrokeEnd, onRenderError, onInputError, changeLayers
 }) {
   const { width: canvasWidth, height: canvasHeight, backgroundColor } = artwork;
@@ -71,10 +73,15 @@ function DrawCanvas({
   const activeStroke = useRef(null);
   const selectionDrag = useRef(null);
   const [selection, setSelection] = useState(null);
+  const [toolSuggestion, setToolSuggestion] = useState(null);
+  const selectionRequest = useRef(0);
   const history = useRef({ undo: [], redo: [], revision: 0 });
+  const selectionBatch = useRef(null);
+  const [splitPrompt, setSplitPrompt] = useState(null);
 
   const selectedArea = toolInfo.tool === 'select' && selection?.layerId === activeId &&
     activeLayer?.visible ? selection : null;
+  const suggestedTool = toolSuggestion?.area === selectedArea ? toolSuggestion : null;
   const drawLayers = useCallback(() => {
     const drag = selectionDrag.current;
     compose(drag?.preview ? { layerId: drag.layerId, canvas: drag.preview.canvas } : undefined);
@@ -85,53 +92,208 @@ function DrawCanvas({
     onStrokeEnd(layerId, true);
   }
 
+  function createClassificationInput() {
+    const snapshot = new OffscreenCanvas(224, 224);
+    const ctx = snapshot.getContext('2d');
+    ctx.fillStyle = 'white';
+    ctx.fillRect(0, 0, 224, 224);
+    return ctx;
+  }
+
+  async function predictCategory(snapshot) {
+    const { predict } = await import('../../model/model');
+    const prediction = await predict(snapshot);
+    return ["명암", "선화", "채색"][prediction];
+  }
+
+  function prepareLayerInput(source) {
+    const ctx = createClassificationInput();
+    const scale = 224 / Math.max(source.width, source.height);
+    const width = source.width * scale;
+    const height = source.height * scale;
+    ctx.drawImage(source, (224 - width) / 2, (224 - height) / 2, width, height);
+    return ctx.canvas;
+  }
+
+  function setLayerCategory(layerId, category) {
+    changeLayers(current => {
+      const layer = current.find(item => item.layerId === layerId);
+      if (!layer || layer.category === category) return;
+      const hasGeneratedName = layer.category ? layer.name === `(${layer.category})`
+        : /^레이어 \d+$/.test(layer.name) || layer.name === '기존 그림';
+      const name = hasGeneratedName ? `(${category})` : layer.name;
+      return { layers: current.map(item => item === layer ? { ...item, name, category } : item) };
+    });
+  }
+
   async function classifyLayer(layerId) {
     const revision = history.current.revision;
-    const target = canvas.current;
-    if (!target) return;
-    // Snapshot before loading the model so later canvas edits cannot change the input.
     try {
-      const snapshot = new OffscreenCanvas(224, 224);
-      const ctx = snapshot.getContext('2d');
-      ctx.fillStyle = 'white';
-      ctx.fillRect(0, 0, 224, 224);
-      const scale = 224 / Math.max(target.width, target.height);
-      const width = target.width * scale;
-      const height = target.height * scale;
-      ctx.drawImage(target, (224 - width) / 2, (224 - height) / 2, width, height);
-      const { predict } = await import('../../model/model');
-      const prediction = await predict(snapshot);
+      const source = getLayerCanvas(layerId, false);
+      if (!source?.width || !source.height) return;
+      const category = await predictCategory(prepareLayerInput(source));
       if (revision !== history.current.revision || !canDraw()) return;
-      const category = ["명암", "선화", "채색"][prediction];
-      if (category) changeLayers(current => {
-        const layer = current.find(item => item.layerId === layerId);
-        if (!layer || layer.category === category) return;
-        const hasGeneratedName = layer.category ? layer.name === `(${layer.category})`
-          : /^레이어 \d+$/.test(layer.name) || layer.name === '기존 그림';
-        const name = hasGeneratedName ? `(${category})` : layer.name;
-        return { layers: current.map(item => item === layer ? { ...item, name, category } : item) };
-      });
+      if (category) setLayerCategory(layerId, category);
     } catch (error) {
       console.error('레이어 자동 분류 실패', error);
     }
   }
 
-  function recordEdit(layerId, pixels) {
+  function clearSelectionBatch() {
+    selectionBatch.current = null;
+    setSplitPrompt(null);
+  }
+
+  function keepStrokesOnLayer() {
+    if (!splitPrompt || splitPrompt.layerId !== activeId || !canDraw() ||
+        activeStroke.current || selectionDrag.current) return;
+    setLayerCategory(activeId, splitPrompt.category);
+    clearSelectionBatch();
+  }
+
+  function trackLayerSelection(id) {
+    if (activeStroke.current || selectionDrag.current) finishStroke();
+    const category = layerList.find(layer => layer.layerId === id)?.category;
+    selectionBatch.current = category ? { layerId: id, category, revision: 0 } : null;
+    history.current.revision++;
+    setSplitPrompt(null);
+    selectionRequest.current++;
+    setToolSuggestion(null);
+  }
+
+  async function suggestSelectionTool(area, source) {
+    const request = ++selectionRequest.current;
+    try {
+      const scale = Math.min(224 / area.width, 224 / area.height);
+      const preview = new OffscreenCanvas(
+        Math.max(1, Math.round(area.width * scale)),
+        Math.max(1, Math.round(area.height * scale))
+      );
+      const ctx = preview.getContext('2d', { willReadFrequently: true });
+      ctx.drawImage(source, area.x, area.y, area.width, area.height, 0, 0, preview.width, preview.height);
+      const { data } = ctx.getImageData(0, 0, preview.width, preview.height);
+      if (!data.some((value, index) => index % 4 === 3 && value > 0)) return;
+
+      const { toolClassify } = await import('../../model/model');
+      if (request !== selectionRequest.current) return;
+      const toolId = await toolClassify(preview);
+      if (request === selectionRequest.current && SELECTION_TOOLS[toolId]) {
+        setToolSuggestion({ area, toolId, confirmed: false });
+      }
+    } catch (error) {
+      console.error('선택 영역 도구 분류 실패', error);
+    }
+  }
+
+  function prepareStrokeInput({ points, width, color, opacity }) {
+    const radius = width / 2;
+    let left = canvasWidth, top = canvasHeight, right = 0, bottom = 0;
+    for (const { x, y } of points) {
+      left = Math.min(left, x - radius);
+      top = Math.min(top, y - radius);
+      right = Math.max(right, x + radius);
+      bottom = Math.max(bottom, y + radius);
+    }
+    left = Math.max(0, left);
+    top = Math.max(0, top);
+    right = Math.min(canvasWidth, right);
+    bottom = Math.min(canvasHeight, bottom);
+    if (left >= right || top >= bottom) return null;
+
+    const ctx = createClassificationInput();
+    const scale = 192 / Math.max(right - left, bottom - top);
+    ctx.translate(112 - (left + right) * scale / 2, 112 - (top + bottom) * scale / 2);
+    ctx.scale(scale, scale);
+    ctx.beginPath();
+    ctx.rect(0, 0, canvasWidth, canvasHeight);
+    ctx.clip();
+    ctx.fillStyle = color;
+    ctx.strokeStyle = color;
+    ctx.globalAlpha = opacity;
+    ctx.lineWidth = width;
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    const [first, ...rest] = points;
+    ctx.beginPath();
+    ctx.arc(first.x, first.y, radius, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.beginPath();
+    ctx.moveTo(first.x, first.y);
+    for (const point of rest) ctx.lineTo(point.x, point.y);
+    ctx.stroke();
+    return ctx.canvas;
+  }
+
+  async function classifyBatch(batch, stroke) {
+    const revision = ++batch.revision;
+    try {
+      const input = prepareStrokeInput(stroke);
+      if (!input) return;
+      const category = await predictCategory(input);
+      if (selectionBatch.current === batch && revision > (batch.mismatchRevision ?? 0) &&
+          category && category !== batch.category) {
+        batch.mismatchRevision = revision;
+        setSplitPrompt({ layerId: batch.layerId, category });
+      }
+    } catch (error) {
+      console.error('레이어 자동 분류 실패', error);
+    }
+  }
+
+  function splitRecentStrokes() {
+    const batch = selectionBatch.current;
+    if (!batch || !splitPrompt || batch.layerId !== activeId || !canDraw() ||
+        activeStroke.current || selectionDrag.current) return;
+
+    const temp = { ...createLayer(`임시 레이어 (${splitPrompt.category})`), category: splitPrompt.category, isTemporary: true };
+    changeLayers((current, selectedId) => {
+      const index = current.findIndex(layer => layer.layerId === batch.layerId && layer.visible);
+      if (index < 0 || selectedId !== batch.layerId) return;
+      const source = getLayerCanvas(batch.layerId, false)?.getContext('2d');
+      if (source?.canvas !== batch.source) return;
+      const destination = getLayerCanvas(temp.layerId, true)?.getContext('2d');
+      if (!destination) return;
+      const before = captureLayer(source);
+      const emptyTemp = captureLayer(destination);
+      destination.drawImage(batch.overlay.canvas, 0, 0);
+      source.putImageData(batch.baseline, 0, 0);
+      const next = [...current];
+      next.splice(index, 0, { ...temp, opacity: current[index].opacity });
+      recordEdit(batch.layerId, before, [{ layerId: temp.layerId, canvas: destination.canvas, pixels: emptyTemp }]);
+      history.current.revision++;
+      clearSelectionBatch();
+      return { layers: next, activeId: temp.layerId, changedPixelIds: [batch.layerId, temp.layerId] };
+    });
+  }
+
+  function recordEdit(layerId, pixels, additional = []) {
     const state = history.current;
-    state.undo.push({ layerId, pixels, canvas: getLayerCanvas(layerId, false) });
-    const limit = Math.max(1, Math.min(HISTORY_LIMIT, Math.floor(64 * 1024 * 1024 / pixels.data.byteLength)));
-    if (state.undo.length > limit) state.undo.shift();
+    state.undo.push({ layerId, pixels, canvas: getLayerCanvas(layerId, false), additional });
+    const maxSnapshots = Math.max(1, Math.floor(64 * 1024 * 1024 / pixels.data.byteLength));
+    let snapshots = 0;
+    for (let i = state.undo.length - 1; i >= 0; i--) {
+      snapshots += 1 + state.undo[i].additional.length;
+      if (i < state.undo.length - 1 && (snapshots > maxSnapshots || state.undo.length - i > HISTORY_LIMIT)) {
+        state.undo.splice(0, i + 1);
+        break;
+      }
+    }
     state.redo.length = 0;
   }
 
   useImperativeHandle(canvasApi, () => ({
     getCanvas: () => canvas.current,
     finishStroke,
+    trackLayerSelection,
     getSelection() {
       if (!selectedArea || selectionDrag.current) return null;
       const { layerId, x, y, width, height } = selectedArea;
       const ctx = getLayer(layerId)?.data;
-      return ctx ? { layerId, x, y, pixels: ctx.getImageData(x, y, width, height) } : null;
+      if (!ctx) return null;
+      const pixels = ctx.getImageData(x, y, width, height);
+      return suggestedTool?.confirmed
+        ? { layerId, x, y, pixels, toolId: suggestedTool.toolId }
+        : { layerId, x, y, pixels };
     },
     fillAt: (clientX, clientY, hex) => guardInput(() => {
       const target = canvas.current;
@@ -153,6 +315,7 @@ function DrawCanvas({
       const color = [rgb >> 16, (rgb >> 8) & 255, rgb & 255, 255];
       if (!fillConnectedPixels(composite, pixels, x, y, color)) return;
 
+      clearSelectionBatch();
       const before = captureLayer(layer.data);
       history.current.revision++;
       setSelection(null);
@@ -184,13 +347,20 @@ function DrawCanvas({
         if (!layer?.data || layer.data.canvas !== entry.canvas) { from.pop(); continue; }
 
         const currentPixels = captureLayer(layer.data);
+        const additional = entry.additional.flatMap(part => {
+          const ctx = getLayer(part.layerId)?.data;
+          return ctx?.canvas === part.canvas ? [{ part, ctx, pixels: captureLayer(ctx) }] : [];
+        });
         layer.data.putImageData(entry.pixels, 0, 0);
+        for (const { part, ctx } of additional) ctx.putImageData(part.pixels, 0, 0);
         from.pop();
-        to.push({ ...entry, pixels: currentPixels });
+        to.push({ ...entry, pixels: currentPixels, additional: additional.map(({ part, pixels }) => ({ ...part, pixels })) });
         state.revision++;
+        clearSelectionBatch();
         setSelection(null);
         drawLayers();
         onStrokeEnd(entry.layerId, true);
+        for (const { part } of additional) onStrokeEnd(part.layerId, true);
         break;
       }
     };
@@ -206,20 +376,26 @@ function DrawCanvas({
     const width = Math.min(target.width, layer.canvas.width);
     const height = Math.min(target.height, layer.canvas.height);
     return {
-      x: Math.max(0, Math.min(width, Math.round((event.clientX - rect.left) * target.width / rect.width))),
-      y: Math.max(0, Math.min(height, Math.round((event.clientY - rect.top) * target.height / rect.height))),
+      x: Math.round((event.clientX - rect.left) * target.width / rect.width),
+      y: Math.round((event.clientY - rect.top) * target.height / rect.height),
       width,
       height
     };
   }
 
   function startSelection(event, layer) {
+    selectionRequest.current++;
+    setToolSuggestion(null);
     if (event.target !== canvas.current || !layer?.visible || !layer.data) {
       setSelection(null);
       return;
     }
 
-    const start = selectionPoint(event, layer.data);
+    const point = selectionPoint(event, layer.data);
+    const start = {
+      x: Math.max(0, Math.min(point.width, point.x)),
+      y: Math.max(0, Math.min(point.height, point.y))
+    };
     const drag = { pointerId: event.pointerId, layerId: layer.layerId, layer: layer.data, start };
     if (selectedArea && start.x >= selectedArea.x && start.x < selectedArea.x + selectedArea.width &&
         start.y >= selectedArea.y && start.y < selectedArea.y + selectedArea.height) {
@@ -242,17 +418,19 @@ function DrawCanvas({
     const { start, original, preview } = drag;
     const point = selectionPoint(event, drag.layer);
     if (!original) {
-      const width = Math.abs(point.x - start.x);
-      const height = Math.abs(point.y - start.y);
+      const x = Math.max(0, Math.min(point.width, point.x));
+      const y = Math.max(0, Math.min(point.height, point.y));
+      const width = Math.abs(x - start.x);
+      const height = Math.abs(y - start.y);
       const area = width && height ? {
-        layerId: drag.layerId, x: Math.min(start.x, point.x), y: Math.min(start.y, point.y), width, height
+        layerId: drag.layerId, x: Math.min(start.x, x), y: Math.min(start.y, y), width, height
       } : null;
       setSelection(area);
       return area;
     }
 
-    const x = Math.max(0, Math.min(point.width - original.width, original.x + point.x - start.x));
-    const y = Math.max(0, Math.min(point.height - original.height, original.y + point.y - start.y));
+    const x = original.x + point.x - start.x;
+    const y = original.y + point.y - start.y;
     preview.clearRect(0, 0, preview.canvas.width, preview.canvas.height);
     preview.drawImage(drag.layer.canvas, 0, 0);
     if (x !== original.x || y !== original.y) {
@@ -271,13 +449,20 @@ function DrawCanvas({
       activeId === drag.layerId && layer?.visible && layer.data === drag.layer;
     const area = valid ? updateSelection(event, drag) : drag.original ?? null;
     selectionDrag.current = null;
-    setSelection(area);
-
     if (valid && drag.original && (area.x !== drag.original.x || area.y !== drag.original.y)) {
+      clearSelectionBatch();
       const before = captureLayer(drag.layer);
       history.current.revision++;
       drag.layer.putImageData(captureLayer(drag.preview), 0, 0);
       commitEdit(drag.layerId, before);
+      const x = Math.max(0, area.x);
+      const y = Math.max(0, area.y);
+      const width = Math.min(canvas.current.width, drag.layer.canvas.width, area.x + area.width) - x;
+      const height = Math.min(canvas.current.height, drag.layer.canvas.height, area.y + area.height) - y;
+      setSelection(width > 0 && height > 0 ? { ...area, x, y, width, height } : null);
+    } else {
+      setSelection(area);
+      if (valid && area && !drag.original) void suggestSelectionTool(area, drag.layer.canvas);
     }
     if (drag.preview) drawLayers();
   }
@@ -297,10 +482,27 @@ function DrawCanvas({
       startSelection(e, layer);
       return;
     }
-    if (!layer?.data) return;
+    const opacity = toolInfo.tool === 'pen' ? penOpacity : 1;
+    if (!layer?.data || opacity === 0) return;
     setSelection(null);
     const layerCanvas = layer.data;
     const pixels = captureLayer(layerCanvas);
+    let batch = selectionBatch.current;
+    if (batch && (batch.layerId !== layer.layerId || toolInfo.tool !== 'pen')) {
+      clearSelectionBatch();
+      batch = null;
+    }
+    if (!batch && toolInfo.tool === 'pen' && layer.category) {
+      batch = { layerId: layer.layerId, category: layer.category, revision: 0 };
+      selectionBatch.current = batch;
+    }
+    if (batch) {
+      if (!batch.overlay) {
+        batch.overlay = new OffscreenCanvas(layerCanvas.canvas.width, layerCanvas.canvas.height).getContext('2d');
+        batch.baseline = pixels;
+        batch.source = layerCanvas.canvas;
+      }
+    }
     e.currentTarget.setPointerCapture(e.pointerId);
     updatePointer(e);
     history.current.revision++;
@@ -308,20 +510,24 @@ function DrawCanvas({
       pointerId: e.pointerId,
       layerId: layer.layerId,
       layerCanvas,
-      pixels, target: e.currentTarget
+      pixels, batch, target: e.currentTarget,
+      classificationStroke: batch ? { points: [{ x: pointer.x, y: pointer.y }], width: strokeSize, color: toolInfo.color, opacity } : null,
+      contexts: batch ? [layerCanvas, batch.overlay] : [layerCanvas]
     };
     onStrokeStart();
     onInputError(null);
 
-    layerCanvas.globalCompositeOperation = toolInfo.tool === 'eraser' ? 'destination-out' : 'source-over';
-    layerCanvas.lineWidth = strokeSize;
-    layerCanvas.lineCap = 'round';
-    layerCanvas.strokeStyle = toolInfo.color;
-    layerCanvas.fillStyle = toolInfo.color;
-
-    layerCanvas.beginPath();
-    layerCanvas.arc(pointer.x,pointer.y,strokeSize / 2,0,Math.PI*2);
-    layerCanvas.fill();
+    for (const ctx of activeStroke.current.contexts) {
+      ctx.globalCompositeOperation = toolInfo.tool === 'eraser' ? 'destination-out' : 'source-over';
+      ctx.globalAlpha = opacity;
+      ctx.lineWidth = strokeSize;
+      ctx.lineCap = 'round';
+      ctx.strokeStyle = toolInfo.color;
+      ctx.fillStyle = toolInfo.color;
+      ctx.beginPath();
+      ctx.arc(pointer.x, pointer.y, strokeSize / 2, 0, Math.PI * 2);
+      ctx.fill();
+    }
     drawLayers()
     // ---------------------
   }
@@ -342,11 +548,13 @@ function DrawCanvas({
     if (!stroke) return;
     if (!canDraw()) { finishStroke(); return; }
 
-    const { layerCanvas } = stroke;
-    layerCanvas.beginPath();
-    layerCanvas.moveTo(x,y);
-    layerCanvas.lineTo(pointer.x,pointer.y);
-    layerCanvas.stroke();
+    stroke.classificationStroke?.points.push({ x: pointer.x, y: pointer.y });
+    for (const ctx of stroke.contexts) {
+      ctx.beginPath();
+      ctx.moveTo(x, y);
+      ctx.lineTo(pointer.x, pointer.y);
+      ctx.stroke();
+    }
     drawLayers()
     // ---------------------
   }
@@ -361,6 +569,7 @@ function DrawCanvas({
     const stroke = activeStroke.current;
     if (!stroke) return;
     activeStroke.current = null;
+    for (const ctx of stroke.contexts) ctx.globalAlpha = 1;
     if (stroke.target.hasPointerCapture(stroke.pointerId)) stroke.target.releasePointerCapture(stroke.pointerId);
     let changed = true;
     try {
@@ -373,9 +582,13 @@ function DrawCanvas({
     }
     if (changed) {
       recordEdit(stroke.layerId, stroke.pixels);
-      void classifyLayer(stroke.layerId);
     }
     onStrokeEnd(stroke.layerId, changed);
+    if (stroke.batch && selectionBatch.current === stroke.batch) {
+      void classifyBatch(stroke.batch, stroke.classificationStroke);
+    } else if (changed) {
+      void classifyLayer(stroke.layerId);
+    }
   }
 
   const onPointerUp = event => {
@@ -439,6 +652,21 @@ function DrawCanvas({
             height: selectedArea.height * scale
           }}
         />
+      )}
+      {suggestedTool && !suggestedTool.confirmed ? (
+        <div className="canvas-action-prompt">
+          <p role="status">선택 영역이 {SELECTION_TOOLS[suggestedTool.toolId]}로 분류되었습니다. {SELECTION_TOOLS[suggestedTool.toolId]} 도구를 사용하시겠습니까?</p>
+          <button type="button" disabled={locked || readOnly} onClick={() => {
+            setToolSuggestion({ ...suggestedTool, confirmed: true });
+          }}>확인</button>
+          <button type="button" onClick={() => setToolSuggestion(null)}>취소</button>
+        </div>
+      ) : splitPrompt?.layerId === activeId && activeLayer?.visible && (
+        <div className="canvas-action-prompt">
+          <p role="status">잘못된 레이어에서 작성 중입니다. 임시 레이어로 분리하시겠습니까?</p>
+          <button type="button" disabled={locked || readOnly} onClick={() => guardInput(splitRecentStrokes)}>확인</button>
+          <button type="button" disabled={locked || readOnly} onClick={keepStrokesOnLayer}>취소</button>
+        </div>
       )}
     </div>
   );

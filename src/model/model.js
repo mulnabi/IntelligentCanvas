@@ -1,10 +1,13 @@
 import * as ort from 'onnxruntime-web'
 import encoderUrl from './vit_encoder.onnx?url'
 import headUrl from './vit_head.onnx?url'
+import toolHeadUrl from './vit_head2.onnx?url'
 
 const encoder = await ort.InferenceSession.create(encoderUrl)
 
 const head = await ort.InferenceSession.create(headUrl)
+
+let toolHeadSession
 
 
 function imageToTensor(canvas) {
@@ -31,18 +34,30 @@ function imageToTensor(canvas) {
   return new ort.Tensor('float32',data,[1,3,224,224])
 }
 
-async function predict(input) {
+async function classify(input, classifier) {
   const encoded = await encoder.run({
     [encoder.inputNames[0]]: imageToTensor(input)
   })
 
   const features = encoded[encoder.outputNames[0]]
 
-  const classified = await head.run({
-    [head.inputNames[0]]: features
+  const classified = await classifier.run({
+    [classifier.inputNames[0]]: features
   })
-  let output=classified[head.outputNames[0]].data
+  const output = classified[classifier.outputNames[0]].data
   return output.indexOf(Math.max(...output))
 }
 
-export { predict };
+function predict(input) {
+  return classify(input, head)
+}
+
+async function toolClassify(input) {
+  toolHeadSession ??= ort.InferenceSession.create(toolHeadUrl).catch(error => {
+    toolHeadSession = undefined
+    throw error
+  })
+  return classify(input, await toolHeadSession)
+}
+
+export { predict, toolClassify };
