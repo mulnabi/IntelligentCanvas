@@ -3,9 +3,39 @@ import { useState, useRef, useCallback, useEffect, useImperativeHandle } from 'r
 
 import { canAllocateCanvas, canvasImageError } from '../../services/canvasImage'
 import { createLayer } from '../../repositories/layerRepository'
+import { classifyImage } from '../../model/classificationClient'
 
 const HISTORY_LIMIT = 20;
 const SELECTION_TOOLS = ['도형', '글자', '대칭'];
+const CLASSIFICATION_IDLE_MS = 450;
+
+function queueStrokeClassification(queue, job) {
+  clearTimeout(queue.timer);
+  queue.pending = job;
+  queue.timer = setTimeout(() => {
+    queue.timer = null;
+    runPendingClassification(queue);
+  }, CLASSIFICATION_IDLE_MS);
+}
+
+async function runPendingClassification(queue) {
+  if (queue.timer !== null || queue.running || !queue.pending) return;
+  const job = queue.pending;
+  queue.pending = null;
+  queue.running = true;
+  try {
+    await job();
+  } finally {
+    queue.running = false;
+    void runPendingClassification(queue);
+  }
+}
+
+function cancelPendingClassification(queue) {
+  clearTimeout(queue.timer);
+  queue.timer = null;
+  queue.pending = null;
+}
 
 
 function captureLayer(ctx) {
@@ -75,6 +105,7 @@ function DrawCanvas({
   const [selection, setSelection] = useState(null);
   const [toolSuggestion, setToolSuggestion] = useState(null);
   const selectionRequest = useRef(0);
+  const classificationQueue = useRef({ timer: null, pending: null, running: false });
   const history = useRef({ undo: [], redo: [], revision: 0 });
   const selectionBatch = useRef(null);
   const [splitPrompt, setSplitPrompt] = useState(null);
@@ -101,8 +132,7 @@ function DrawCanvas({
   }
 
   async function predictCategory(snapshot) {
-    const { predict } = await import('../../model/model');
-    const prediction = await predict(snapshot);
+    const prediction = await classifyImage(snapshot, 'layer');
     return ["명암", "선화", "채색"][prediction];
   }
 
@@ -153,6 +183,7 @@ function DrawCanvas({
 
   function trackLayerSelection(id) {
     if (activeStroke.current || selectionDrag.current) finishStroke();
+    cancelPendingClassification(classificationQueue.current);
     const category = layerList.find(layer => layer.layerId === id)?.category;
     selectionBatch.current = category ? { layerId: id, category, revision: 0 } : null;
     history.current.revision++;
@@ -174,9 +205,7 @@ function DrawCanvas({
       const { data } = ctx.getImageData(0, 0, preview.width, preview.height);
       if (!data.some((value, index) => index % 4 === 3 && value > 0)) return;
 
-      const { toolClassify } = await import('../../model/model');
-      if (request !== selectionRequest.current) return;
-      const toolId = await toolClassify(preview);
+      const toolId = await classifyImage(preview, 'tool');
       if (request === selectionRequest.current && SELECTION_TOOLS[toolId]) {
         setToolSuggestion({ area, toolId, confirmed: false });
       }
@@ -322,7 +351,7 @@ function DrawCanvas({
       layer.data.putImageData(pixels, 0, 0);
       drawLayers();
       commitEdit(layer.layerId, before);
-      void classifyLayer(layer.layerId);
+      scheduleLayerClassification(layer.layerId);
     })
   }));
 
@@ -484,6 +513,7 @@ function DrawCanvas({
     }
     const opacity = toolInfo.tool === 'pen' ? penOpacity : 1;
     if (!layer?.data || opacity === 0) return;
+    cancelPendingClassification(classificationQueue.current);
     setSelection(null);
     const layerCanvas = layer.data;
     const pixels = captureLayer(layerCanvas);
@@ -585,10 +615,23 @@ function DrawCanvas({
     }
     onStrokeEnd(stroke.layerId, changed);
     if (stroke.batch && selectionBatch.current === stroke.batch) {
-      void classifyBatch(stroke.batch, stroke.classificationStroke);
+      queueStrokeClassification(classificationQueue.current, () => {
+        if (!activeStroke.current && selectionBatch.current === stroke.batch && canDraw()) {
+          return classifyBatch(stroke.batch, stroke.classificationStroke);
+        }
+      });
     } else if (changed) {
-      void classifyLayer(stroke.layerId);
+      scheduleLayerClassification(stroke.layerId);
     }
+  }
+
+  function scheduleLayerClassification(layerId) {
+    const revision = history.current.revision;
+    queueStrokeClassification(classificationQueue.current, () => {
+      if (!activeStroke.current && revision === history.current.revision && canDraw()) {
+        return classifyLayer(layerId);
+      }
+    });
   }
 
   const onPointerUp = event => {
@@ -609,6 +652,15 @@ function DrawCanvas({
       else onRenderError(error);
     }
   }
+
+  useEffect(() => {
+    const queue = classificationQueue.current;
+    const editHistory = history.current;
+    return () => {
+      cancelPendingClassification(queue);
+      editHistory.revision++;
+    };
+  }, []);
 
   useEffect(() => {
     const target = canvas.current;

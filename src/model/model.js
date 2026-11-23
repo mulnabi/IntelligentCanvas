@@ -3,6 +3,9 @@ import encoderUrl from './vit_encoder.onnx?url'
 import headUrl from './vit_head.onnx?url'
 import toolHeadUrl from './vit_head2.onnx?url'
 
+// 추론은 워커에서 실행하며 펜 입력과 CPU를 과도하게 경쟁하지 않도록 한다.
+ort.env.wasm.numThreads = 1
+
 const encoder = await ort.InferenceSession.create(encoderUrl)
 
 const head = await ort.InferenceSession.create(headUrl)
