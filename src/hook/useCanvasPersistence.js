@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useBlocker } from 'react-router'
 import { getCanvasErrorMessage } from '../repositories/canvasRepository'
-import { openLayerDocument, saveLayerChanges } from '../repositories/layerRepository'
-import { canvasImageError, extractCanvasPng, prepareCanvas } from '../services/canvasImage'
+import { EMPTY_LAYER_CATEGORY, openLayerDocument, saveLayerChanges } from '../repositories/layerRepository'
+import { canvasImageError, extractCanvasPng, hasVisiblePixels, prepareCanvas } from '../services/canvasImage'
 import { createLayerCanvas } from '../services/layerCanvas'
 import { registerPendingCanvasEditor } from '../services/pendingCanvasChanges'
 import { canWriteOpenArtwork } from '../services/editSessionService'
@@ -152,12 +152,13 @@ export function useCanvasPersistence({ uid, artworkId, width, height }, canvasAp
           session.dirtyPixels.delete(change.removedId)
           renderer.remove(change.removedId)
         }
-        session.layers = change.layers.map((layer, sortOrder) => ({ ...layer, sortOrder }))
-        for (const layerId of change.changedPixelIds ?? []) {
+        const changedIds = new Set(change.changedPixelIds)
+        session.layers = change.layers.map((layer, sortOrder) => {
+          if (!changedIds.has(layer.layerId)) return { ...layer, sortOrder }
           const pixelRevision = ++session.revision
-          session.dirtyPixels.set(layerId, pixelRevision)
-          session.layers = session.layers.map(layer => layer.layerId === layerId ? { ...layer, pixelRevision } : layer)
-        }
+          session.dirtyPixels.set(layer.layerId, pixelRevision)
+          return { ...layer, sortOrder, pixelRevision }
+        })
         session.activeId = change.activeId ?? session.activeId
         session.metadataRevision = ++session.revision
         compose()
@@ -185,7 +186,17 @@ export function useCanvasPersistence({ uid, artworkId, width, height }, canvasAp
         })
         if (serverSnapshot) await renderer.restore(serverSnapshot, abort.signal)
         if (session.disposed) return
-        session.layers = layers
+        session.layers = layers.map(layer => {
+          const source = renderer.getOriginal(layer.layerId, false)
+          if (!source) return { ...layer, category: EMPTY_LAYER_CATEGORY }
+          const ctx = source.getContext('2d')
+          for (let y = 0; y < source.height; y += 128) {
+            if (hasVisiblePixels(ctx.getImageData(0, y, source.width, Math.min(128, source.height - y)))) {
+              return layer.category === EMPTY_LAYER_CATEGORY ? { ...layer, category: null } : layer
+            }
+          }
+          return { ...layer, category: EMPTY_LAYER_CATEGORY }
+        })
         session.activeId = layers[0].layerId
         session.previousIds = unpersisted ? [] : layers.map(layer => layer.layerId)
         session.initialContents = unpersisted ? contents : null

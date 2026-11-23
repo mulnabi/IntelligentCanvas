@@ -9,8 +9,10 @@ function layerError(message) {
   return Object.assign(new Error(message), { code: 'canvas/layers' })
 }
 
-export function createLayer(name) {
-  return { layerId: crypto.randomUUID(), name, sortOrder: 0, opacity: 1, visible: true, isTemporary: false, category: null }
+export const EMPTY_LAYER_CATEGORY = '빈 레이어'
+
+export function createLayer(name, category = EMPTY_LAYER_CATEGORY) {
+  return { layerId: crypto.randomUUID(), name, sortOrder: 0, opacity: 1, visible: true, isTemporary: false, category }
 }
 
 function listLayers(uid, artworkId) {
@@ -83,7 +85,8 @@ export async function openLayerDocument(uid, artworkId, { prepare, signal }) {
 
   const legacy = await getCanvasContent(uid, artworkId)
   signal.throwIfAborted()
-  const layers = prepareLayerRows(uid, artworkId, [createLayer(legacy ? '기존 그림' : '레이어 1')])
+  const initialLayer = legacy ? createLayer('기존 그림', null) : createLayer('레이어 1')
+  const layers = prepareLayerRows(uid, artworkId, [initialLayer])
   const contents = legacy ? [{ ...legacy, layerId: layers[0].layerId }] : []
   await prepare({ layers, contents })
   signal.throwIfAborted()

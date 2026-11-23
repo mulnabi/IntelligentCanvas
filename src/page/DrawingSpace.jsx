@@ -25,7 +25,9 @@ function ArtworkEditor({ artwork, edit, serverSnapshot }) {
   const layerState = useLayers(persistence)
   const activeLayer = layerState.layers.find(layer => layer.layerId === layerState.activeId)
   return (
-    <>
+    <div className="drawing-workspace" onDragStart={event => {
+      if (!event.target.closest('input, textarea, [contenteditable="true"]')) event.preventDefault()
+    }}>
       <ToolPicker f={setToolInfo} onColorDrop={(x, y, color) => canvasApi.current?.fillAt(x, y, color)} />
       <DrawCanvas toolInfo={toolInfo} strokeSize={strokeSize} penOpacity={penOpacity / 100} artwork={artwork} canvasApi={canvasApi} activeLayer={activeLayer} readOnly={!edit.writable}
         onInputError={error => { if (error) console.error(getCanvasErrorMessage(error)) }} {...persistence}/>
@@ -54,7 +56,7 @@ function ArtworkEditor({ artwork, edit, serverSnapshot }) {
           layerState.select(id)
         }}
         disabled={persistence.locked || !edit.writable} />}
-    </>
+    </div>
   )
 }
 

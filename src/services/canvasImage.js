@@ -2,6 +2,13 @@
 // 메모리를 쓰므로 8192×8192 메타데이터를 무조건 Canvas로 할당하지 않는다.
 export const MAX_EDITABLE_CANVAS_PIXELS = 16_777_216
 
+export function hasVisiblePixels({ data }) {
+  for (let index = 3; index < data.length; index += 4) {
+    if (data[index] !== 0) return true
+  }
+  return false
+}
+
 export function canvasImageError(message) {
   return Object.assign(new Error(message), { code: 'canvas/image-error' })
 }
