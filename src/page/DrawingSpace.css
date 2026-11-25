@@ -120,6 +120,63 @@
   flex: none;
 }
 
+.canvas-ocr-prompt {
+  flex-wrap: wrap;
+}
+
+.canvas-text-edit-box {
+  position: absolute;
+  transform: translate(-50%, -50%);
+}
+
+.canvas-text-editor {
+  display: block;
+  box-sizing: border-box;
+  width: 100%;
+  height: 100%;
+  appearance: none;
+  border: 0;
+  border-radius: 0;
+  padding: 0;
+  background: transparent;
+  outline: 1px dashed #2458dc;
+  font-family: sans-serif;
+  font-size: inherit;
+  text-align: center;
+  color: transparent;
+  -webkit-text-fill-color: transparent;
+  caret-color: #2458dc;
+}
+
+.canvas-text-editor:focus {
+  outline-style: solid;
+}
+
+.canvas-text-editor::selection {
+  background: #2458dc40;
+  color: transparent;
+}
+
+.canvas-text-move {
+  position: absolute;
+  right: 0;
+  bottom: 100%;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: 1px solid #2458dc;
+  border-radius: 6px 6px 0 0;
+  background: #fff;
+  color: #2458dc;
+  font-size: 19px;
+  cursor: grab;
+  touch-action: none;
+}
+
+.canvas-text-move:active {
+  cursor: grabbing;
+}
+
 .brush-controls {
   position: fixed;
   top: max(12px, env(safe-area-inset-top));

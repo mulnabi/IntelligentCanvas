@@ -3,7 +3,7 @@ import { useState, useRef, useCallback, useEffect, useId, useImperativeHandle, u
 
 import { canAllocateCanvas, canvasImageError, hasVisiblePixels } from '../../services/canvasImage'
 import { createLayer, EMPTY_LAYER_CATEGORY } from '../../repositories/layerRepository'
-import { classifyImage } from '../../model/classificationClient'
+import { classifyImage, findCanvasFillRegion } from '../../model/classificationClient'
 import { prepareSymmetryBrush, updateSymmetryPreview } from '../../services/canvasSymmetry'
 
 const HISTORY_LIMIT = 20;
@@ -147,6 +147,64 @@ function updateShapePreview(previous, shape) {
   return { area, source, ctx, bounds: { x, y, width, height } };
 }
 
+function fitConvertedText(ctx, box, text) {
+  ctx.save();
+  try {
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'alphabetic';
+    ctx.font = '100px sans-serif';
+    const sample = text.trim() ? text : '가';
+    const initial = ctx.measureText(sample);
+    const textWidth = Math.max(initial.width, 2 * initial.actualBoundingBoxLeft, 2 * initial.actualBoundingBoxRight);
+    const textHeight = initial.actualBoundingBoxAscent + initial.actualBoundingBoxDescent;
+    const size = Math.max(1, 100 * Math.min(box.width / Math.max(1, textWidth), box.height / Math.max(1, textHeight)));
+    const font = `${size}px sans-serif`;
+    ctx.font = font;
+    const fitted = ctx.measureText(sample);
+    const baseline = (box.height + fitted.actualBoundingBoxAscent - fitted.actualBoundingBoxDescent) / 2;
+    const inputCenterY = baseline + (fitted.fontBoundingBoxDescent - fitted.fontBoundingBoxAscent) / 2;
+    return { font, size, baseline, inputCenterY };
+  } finally {
+    ctx.restore();
+  }
+}
+
+function paintConvertedText(ctx, { originBox, box, text, layout }, color) {
+  ctx.clearRect(originBox.x, originBox.y, originBox.width, originBox.height);
+  if (!text.trim()) return;
+  ctx.save();
+  try {
+    const clip = new Path2D();
+    clip.rect(box.x, box.y, box.width, box.height);
+    ctx.clip(clip);
+    ctx.globalCompositeOperation = 'source-over';
+    ctx.globalAlpha = 1;
+    ctx.fillStyle = color;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'alphabetic';
+    ctx.font = layout.font;
+    ctx.fillText(text, box.x + box.width / 2, box.y + layout.baseline);
+  } finally {
+    ctx.restore();
+  }
+}
+
+function updateTextPreview(previous, draft, color) {
+  const { area, source, originBox, box } = draft;
+  const matches = previous?.textOrigin === originBox && previous.source === source;
+  const ctx = matches ? previous.ctx : new OffscreenCanvas(source.width, source.height).getContext('2d');
+  if (matches) {
+    // Restore the previous destination so that moving text preserves the surrounding drawing.
+    const { x, y, width, height } = previous.textBox;
+    ctx.clearRect(x, y, width, height);
+    ctx.drawImage(source, x, y, width, height, x, y, width, height);
+  } else {
+    ctx.drawImage(source, 0, 0);
+  }
+  paintConvertedText(ctx, draft, color);
+  return { area, source, ctx, textOrigin: originBox, textBox: box };
+}
+
 function shapeExteriorClip(shape, width, height) {
   const bounds = shapeBounds(shape);
   const left = Math.min(0, bounds.left);
@@ -186,42 +244,56 @@ function pinchViewport(start, current) {
   };
 }
 
-function fillConnectedPixels(composite, destination, x, y, color) {
-  const { data, width, height } = composite;
-  const pixels = destination.data;
-  const start = y * width + x;
-  const offset = start * 4;
-  const [red, green, blue, alpha] = data.subarray(offset, offset + 4);
+function matchesFillSeed(pixels, offset, seed) {
+  return pixels[offset + 3] === seed[3] && (seed[3] === 0 ||
+    (pixels[offset] === seed[0] && pixels[offset + 1] === seed[1] && pixels[offset + 2] === seed[2]));
+}
 
-  const queue = new Uint32Array(width * height);
-  const visited = new Uint8Array(width * height);
-  let tail = 0;
+function paintFill(pixels, mask, start, color, hasLowerLayers, upperPixels) {
+  const seedOffset = start * 4;
+  const seed = pixels.slice(seedOffset, seedOffset + 4);
+  const upperSeed = upperPixels?.subarray(seedOffset, seedOffset + 4);
   let changed = false;
-
-  function visit(pixel) {
-    if (visited[pixel]) return;
-    visited[pixel] = 1;
-    const index = pixel * 4;
-    if (data[index + 3] !== alpha ||
-        (alpha !== 0 && (data[index] !== red || data[index + 1] !== green || data[index + 2] !== blue))) return;
-    if (pixels[index] !== color[0] || pixels[index + 1] !== color[1] ||
-        pixels[index + 2] !== color[2] || pixels[index + 3] !== color[3]) {
-      pixels.set(color, index);
+  for (let pixel = 0; pixel < mask.length; pixel++) {
+    const coverage = mask[pixel];
+    if (coverage === 0) continue;
+    const offset = pixel * 4;
+    if (coverage === 255) {
+      if (matchesFillSeed(pixels, offset, color)) continue;
+      pixels.set(color, offset);
       changed = true;
+      continue;
     }
-    queue[tail++] = pixel;
-  }
 
-  visit(start);
-  for (let head = 0; head < tail; head++) {
-    const pixel = queue[head];
-    const column = pixel % width;
-    if (column > 0) visit(pixel - 1);
-    if (column < width - 1) visit(pixel + 1);
-    if (pixel >= width) visit(pixel - width);
-    if (pixel < width * (height - 1)) visit(pixel + width);
+    const sameColor = matchesFillSeed(pixels, offset, seed);
+    const uncovered = 1 - coverage / 255;
+    const lowerEdge = hasLowerLayers && (!upperPixels || matchesFillSeed(upperPixels, offset, upperSeed));
+    const strength = lowerEdge && sameColor ? uncovered : 1;
+    const alpha = pixels[offset + 3] / 255;
+    if (alpha < 1) {
+      // Paint beneath the active layer's partially transparent stroke pixels.
+      const added = (1 - alpha) * strength;
+      for (let channel = 0; channel < 3; channel++) {
+        pixels[offset + channel] = (pixels[offset + channel] * alpha + color[channel] * added) / (alpha + added);
+      }
+      pixels[offset + 3] = (alpha + added) * 255;
+      changed = true;
+    } else if (seed[3] === 255) {
+      // Change only the contribution of the seed color inside a blended edge.
+      const weight = sameColor ? strength : uncovered;
+      for (let channel = 0; channel < 3; channel++) {
+        const at = offset + channel;
+        const previous = pixels[at];
+        pixels[at] += (color[channel] - seed[channel]) * weight;
+        if (pixels[at] !== previous) changed = true;
+      }
+    }
   }
   return changed;
+}
+
+function fillLayerSignature(layers) {
+  return JSON.stringify(layers.filter(layer => layer.visible).map(layer => [layer.layerId, layer.opacity, layer.pixelRevision]));
 }
 
 function DrawCanvas({
@@ -255,25 +327,30 @@ function DrawCanvas({
   const symmetryFrame = useRef(null);
   const shapeClipId = useId();
   const shapePreview = useRef(null);
-  const shapeDrag = useRef(null);
+  const editorDrag = useRef(null);
   const selectionRequest = useRef(0);
+  const fillRequest = useRef(0);
   const classificationQueue = useRef({ timer: null, pending: null, running: false });
   const history = useRef({ undo: [], redo: [], revision: 0 });
   const layerReview = useRef(null);
   const [reviewPrompt, setReviewPrompt] = useState(null);
   const latestLayers = useRef(layerList);
+  const latestActiveId = useRef(activeId);
 
   useLayoutEffect(() => {
     latestLayers.current = layerList;
-  }, [layerList]);
+    latestActiveId.current = activeId;
+  }, [layerList, activeId]);
 
   const layerSelection = selection?.layerId === activeId && activeLayer?.visible ? selection : null;
   const selectedArea = toolInfo.tool === 'select' ? layerSelection : null;
   const suggestedTool = toolSuggestion?.area === selectedArea ? toolSuggestion : null;
   const editedShape = shapeDraft?.area === selectedArea ? shapeDraft : null;
   const editedSymmetry = symmetryDraft?.area === layerSelection ? symmetryDraft : null;
+  const editedText = suggestedTool?.ocrPhase === 'review' && suggestedTool.revision === history.current.revision
+    ? suggestedTool : null;
   const shownSelection = editedSymmetry?.area ?? selectedArea;
-  const editPreview = editedShape ?? editedSymmetry;
+  const editPreview = editedShape ?? editedSymmetry ?? editedText;
   const shapePoints = editedShape?.vertices.map(point => `${point.x},${point.y}`).join(' ');
   const exteriorClip = editedShape && shapeExteriorClip(editedShape, canvasWidth, canvasHeight);
   const drawLayers = useCallback(() => {
@@ -296,7 +373,8 @@ function DrawCanvas({
         const previous = shapePreview.current;
         const preview = editedShape
           ? updateShapePreview(previous?.bounds ? previous : null, editedShape)
-          : updateSymmetryPreview(previous, editPreview);
+          : editedText ? updateTextPreview(previous, editedText, toolInfo.color)
+            : updateSymmetryPreview(previous, editPreview);
         shapePreview.current = preview;
         compose({ layerId: editPreview.area.layerId, canvas: preview.ctx.canvas });
       } catch (error) {
@@ -306,7 +384,7 @@ function DrawCanvas({
       }
     });
     return () => cancelAnimationFrame(frame);
-  }, [editPreview, editedShape, compose, drawLayers]);
+  }, [editPreview, editedShape, editedText, toolInfo.color, compose, drawLayers]);
 
   function commitEdit(layerId, pixels) {
     recordEdit(layerId, pixels);
@@ -462,8 +540,8 @@ function DrawCanvas({
       beginSymmetry();
       return;
     }
-    if (suggestedTool.toolId !== 0) {
-      setToolSuggestion({ ...suggestedTool, confirmed: true });
+    if (suggestedTool.toolId === 1) {
+      await readSelectedWord(suggestedTool);
       return;
     }
 
@@ -503,6 +581,83 @@ function DrawCanvas({
     }
   }
 
+  async function readSelectedWord(suggestion) {
+    const { area } = suggestion;
+    const source = getLayerCanvas(area.layerId, false);
+    if (!canDraw() || !source || area !== selectedArea || selectionDrag.current) return;
+    const request = ++selectionRequest.current;
+    const revision = history.current.revision;
+    setToolSuggestion({ ...suggestion, confirmed: true, ocrPhase: 'reading' });
+    try {
+      const crop = new OffscreenCanvas(area.width, area.height);
+      const ctx = crop.getContext('2d');
+      ctx.drawImage(source, area.x, area.y, area.width, area.height, 0, 0, area.width, area.height);
+      const { text, bounds } = await classifyImage(crop, 'ocr');
+      if (request !== selectionRequest.current || revision !== history.current.revision) return;
+      const ink = bounds ?? { x: 0, y: 0, width: area.width, height: area.height };
+      const box = { ...ink, x: area.x + ink.x, y: area.y + ink.y };
+      const layout = fitConvertedText(ctx, box, text);
+      setToolSuggestion({ ...suggestion, confirmed: true, ocrPhase: 'review', text, originBox: box, box, layout, source, revision });
+    } catch (error) {
+      if (request !== selectionRequest.current || revision !== history.current.revision) return;
+      console.error('글자 인식 실패', error);
+      setToolSuggestion({ ...suggestion, confirmed: true, ocrPhase: 'error' });
+    }
+  }
+
+  function updateSelectedWord(text) {
+    if (!editedText || !canDraw()) return;
+    const { originBox, source } = editedText;
+    const layout = fitConvertedText(source.getContext('2d'), originBox, text);
+    setToolSuggestion(draft => draft?.originBox === originBox ? { ...draft, text, layout } : draft);
+  }
+
+  function moveSelectedWord(x, y) {
+    if (!editedText || !canDraw()) return;
+    const { originBox, source } = editedText;
+    setToolSuggestion(draft => {
+      if (draft?.originBox !== originBox) return draft;
+      const { box } = draft;
+      const left = Math.max(0, Math.min(source.width - box.width, Math.round(x)));
+      const top = Math.max(0, Math.min(source.height - box.height, Math.round(y)));
+      if (left === box.x && top === box.y) return draft;
+      return { ...draft, box: { ...box, x: left, y: top } };
+    });
+  }
+
+  function cancelToolSuggestion() {
+    stopEditorDrag();
+    selectionRequest.current++;
+    setToolSuggestion(null);
+  }
+
+  function applySelectedWord() {
+    if (!editedText || !editedText.text.trim() || !canDraw() ||
+        editorDrag.current || activeStroke.current || selectionDrag.current) return;
+    const { area, source, revision } = editedText;
+    if (revision !== history.current.revision || source !== getLayerCanvas(area.layerId, false)) {
+      cancelToolSuggestion();
+      return;
+    }
+
+    const ctx = source.getContext('2d');
+    const before = captureLayer(ctx);
+    let after;
+    try {
+      paintConvertedText(ctx, editedText, toolInfo.color);
+      after = captureLayer(ctx);
+    } catch (error) {
+      ctx.putImageData(before, 0, 0);
+      throw error;
+    }
+    history.current.revision++;
+    setSelection(null);
+    cancelToolSuggestion();
+    commitEdit(area.layerId, before);
+    drawLayers();
+    updateClassification(area.layerId, after);
+  }
+
   function updateVertex(index, x, y) {
     setShapeDraft(draft => {
       if (!draft) return draft;
@@ -526,7 +681,7 @@ function DrawCanvas({
 
   function startEditorDrag(event, focus, update) {
     event.stopPropagation();
-    if (event.button !== 0 || shapeDrag.current || activeStroke.current || !canDraw()) return;
+    if (event.button !== 0 || editorDrag.current || activeStroke.current || !canDraw()) return;
     if (event.cancelable) event.preventDefault();
     if (focus) event.currentTarget.focus({ preventScroll: true });
     const { pointerId, clientX, clientY } = event;
@@ -538,9 +693,9 @@ function DrawCanvas({
     const end = next => {
       if (next.pointerId !== pointerId) return;
       if (next.type === 'pointerup') move(next);
-      stopShapeDrag();
+      stopEditorDrag();
     };
-    shapeDrag.current = {
+    editorDrag.current = {
       release: () => {
         window.removeEventListener('pointermove', move, true);
         window.removeEventListener('pointerup', end, true);
@@ -551,14 +706,14 @@ function DrawCanvas({
     window.addEventListener('pointercancel', end, true);
   }
 
-  function stopShapeDrag() {
-    const drag = shapeDrag.current;
-    shapeDrag.current = null;
+  function stopEditorDrag() {
+    const drag = editorDrag.current;
+    editorDrag.current = null;
     drag?.release();
   }
 
   function discardShape() {
-    stopShapeDrag();
+    stopEditorDrag();
     setShapeDraft(null);
   }
 
@@ -593,12 +748,12 @@ function DrawCanvas({
 
   function discardSymmetry() {
     if (activeStroke.current?.symmetry) finishStroke();
-    stopShapeDrag();
+    stopEditorDrag();
     setSymmetryDraft(null);
   }
 
   function applySymmetry() {
-    if (!editedSymmetry || !canDraw() || shapeDrag.current || activeStroke.current) return;
+    if (!editedSymmetry || !canDraw() || editorDrag.current || activeStroke.current) return;
     const { area, source, revision } = editedSymmetry;
     if (source !== getLayerCanvas(area.layerId, false) || revision !== history.current.revision) {
       discardSymmetry();
@@ -631,7 +786,7 @@ function DrawCanvas({
   }
 
   function applyShape() {
-    if (!editedShape || !canDraw() || shapeDrag.current) return;
+    if (!editedShape || !canDraw() || editorDrag.current) return;
     const { area, source, revision } = editedShape;
     const currentSource = getLayerCanvas(area.layerId, false);
     if (currentSource !== source || revision !== history.current.revision) {
@@ -717,6 +872,68 @@ function DrawCanvas({
     state.redo.length = 0;
   }
 
+  function fillOverlay(layerId, width, height) {
+    const layers = latestLayers.current;
+    const index = layers.findIndex(layer => layer.layerId === layerId);
+    const hasLowerLayers = layers.slice(index + 1).some(layer =>
+      layer.visible && layer.opacity > 0 && getLayerCanvas(layer.layerId, false));
+    if (!hasLowerLayers) return { hasLowerLayers };
+
+    let ctx;
+    for (let i = index - 1; i >= 0; i--) {
+      const layer = layers[i];
+      if (!layer.visible || !layer.opacity) continue;
+      const source = getLayerCanvas(layer.layerId, false);
+      if (!source) continue;
+      ctx ??= new OffscreenCanvas(width, height).getContext('2d', { willReadFrequently: true });
+      ctx.globalAlpha = layer.opacity;
+      ctx.drawImage(source, 0, 0);
+    }
+    return { hasLowerLayers, upperPixels: ctx?.getImageData(0, 0, width, height).data };
+  }
+
+  function fillAt(clientX, clientY, hex) {
+    const target = canvas.current;
+    if (!canDraw() || !target || editPreview || activeStroke.current || selectionDrag.current ||
+        !activeLayer?.visible || document.elementFromPoint(clientX, clientY) !== target) return;
+
+    const layer = getLayer(activeId, true);
+    if (!layer?.data) return;
+    const { data: ctx, layerId } = layer;
+    const rect = target.getBoundingClientRect();
+    const x = Math.floor((clientX - rect.left) * target.width / rect.width);
+    const y = Math.floor((clientY - rect.top) * target.height / rect.height);
+    const width = Math.min(target.width, ctx.canvas.width);
+    const height = Math.min(target.height, ctx.canvas.height);
+    if (x < 0 || y < 0 || x >= width || y >= height) return;
+
+    const request = ++fillRequest.current;
+    const selectionVersion = selectionRequest.current;
+    const revision = history.current.revision;
+    const layerSignature = fillLayerSignature(latestLayers.current);
+    const composite = target.getContext('2d').getImageData(0, 0, width, height);
+    const rgb = Number.parseInt(hex.slice(1), 16);
+    const color = [rgb >> 16, (rgb >> 8) & 255, rgb & 255, 255];
+    void findCanvasFillRegion(composite, x, y).then(({ mask, hasEdge }) => guardInput(() => {
+      // A stroke, layer change or newer drop can invalidate the composite snapshot.
+      if (request !== fillRequest.current || revision !== history.current.revision ||
+          selectionVersion !== selectionRequest.current || !canDraw() || latestActiveId.current !== layerId ||
+          layerSignature !== fillLayerSignature(latestLayers.current) ||
+          getLayerCanvas(layerId, false) !== ctx.canvas) return;
+
+      const pixels = ctx.getImageData(0, 0, width, height);
+      const overlay = hasEdge ? fillOverlay(layerId, width, height) : {};
+      if (!paintFill(pixels.data, mask, y * width + x, color, overlay.hasLowerLayers, overlay.upperPixels)) return;
+      const before = captureLayer(ctx);
+      history.current.revision++;
+      setSelection(null);
+      ctx.putImageData(pixels, 0, 0);
+      drawLayers();
+      commitEdit(layerId, before);
+      updateClassification(layerId, pixels);
+    }), onInputError);
+  }
+
   useImperativeHandle(canvasApi, () => ({
     getCanvas: () => canvas.current,
     finishStroke,
@@ -731,38 +948,11 @@ function DrawCanvas({
         ? { layerId, x, y, pixels, toolId: suggestedTool.toolId }
         : { layerId, x, y, pixels };
     },
-    fillAt: (clientX, clientY, hex) => guardInput(() => {
-      const target = canvas.current;
-      if (!canDraw() || !target || editPreview || activeStroke.current || selectionDrag.current ||
-          document.elementFromPoint(clientX, clientY) !== target) return;
-
-      if (!activeLayer?.visible) return;
-      const layer = getLayer(activeId, true);
-      const rect = target.getBoundingClientRect();
-      const x = Math.floor((clientX - rect.left) * target.width / rect.width);
-      const y = Math.floor((clientY - rect.top) * target.height / rect.height);
-      const width = Math.min(target.width, layer.data.canvas.width);
-      const height = Math.min(target.height, layer.data.canvas.height);
-      if (x < 0 || y < 0 || x >= width || y >= height) return;
-
-      const composite = target.getContext('2d').getImageData(0, 0, width, height);
-      const pixels = layer.data.getImageData(0, 0, width, height);
-      const rgb = Number.parseInt(hex.slice(1), 16);
-      const color = [rgb >> 16, (rgb >> 8) & 255, rgb & 255, 255];
-      if (!fillConnectedPixels(composite, pixels, x, y, color)) return;
-
-      const before = captureLayer(layer.data);
-      history.current.revision++;
-      setSelection(null);
-      layer.data.putImageData(pixels, 0, 0);
-      drawLayers();
-      commitEdit(layer.layerId, before);
-      updateClassification(layer.layerId, pixels);
-    })
+    fillAt: (clientX, clientY, hex) => guardInput(() => fillAt(clientX, clientY, hex))
   }));
 
   function applyHistory(redo) {
-    if (!canDraw() || editedSymmetry || activeStroke.current || selectionDrag.current || touchGesture.current.pinching) return;
+    if (!canDraw() || editedSymmetry || editedText || activeStroke.current || selectionDrag.current || touchGesture.current.pinching) return;
 
     const state = history.current;
     const from = redo ? state.redo : state.undo;
@@ -932,7 +1122,7 @@ function DrawCanvas({
   }
 
   function startSymmetryStroke(event) {
-    if (shapeDrag.current) return;
+    if (editorDrag.current) return;
     updatePointer(event);
     const { area, source, working: previousWorking } = editedSymmetry;
     const { x, y, width, height } = area;
@@ -994,7 +1184,7 @@ function DrawCanvas({
     // ------ 추가-2 ------
     const onCanvas = e.target === canvas.current;
     const selecting = toolInfo.tool === 'select';
-    if (!canDraw() || !allocated || editedShape || e.button !== 0 || activeStroke.current ||
+    if (!canDraw() || !allocated || editedShape || editedText || e.button !== 0 || activeStroke.current ||
         selectionDrag.current || !activeLayer?.visible ||
         (!onCanvas && !(selecting && e.target === e.currentTarget))) return;
     if (editedSymmetry) {
@@ -1304,7 +1494,7 @@ function DrawCanvas({
 
   useEffect(() => {
     const onBlur = () => guardInput(() => {
-      stopShapeDrag();
+      stopEditorDrag();
       const gesture = touchGesture.current;
       const drawingId = activeStroke.current?.pointerId ?? selectionDrag.current?.pointerId;
       if (drawingId != null && gesture.pointers.has(drawingId)) cancelTouchEdit(drawingId);
@@ -1324,14 +1514,15 @@ function DrawCanvas({
   });
 
   useEffect(() => {
-    const drag = shapeDrag;
+    const drag = editorDrag;
     return () => { drag.current?.release(); };
   }, []);
 
   return (
     <div className="drawarea">
       <div ref={surface} className="drawing-surface" onWheel={e => {
-        if (!ready || locked || touchGesture.current.pinching || activeStroke.current?.symmetry) return;
+        if (!ready || locked || touchGesture.current.pinching || activeStroke.current?.symmetry ||
+            (editedText && editorDrag.current)) return;
         updatePointer(e);
         const delta = e.deltaY > 0 ? scale/20 : -scale/20;
         const scaleValue = Math.min(Math.max(scale + delta, 0.1), 5);
@@ -1352,7 +1543,7 @@ function DrawCanvas({
           style={{background: backgroundColor, transform: `translate(calc(-50% + ${pos.x}px), calc(-50% + ${pos.y}px))scale(${scale})`}}
         />
       </div>
-      {shownSelection && !editedShape && (
+      {shownSelection && !editedShape && !editedText && (
         <div
           className="canvas-selection"
           style={{
@@ -1362,6 +1553,47 @@ function DrawCanvas({
             height: shownSelection.height * scale
           }}
         />
+      )}
+      {editedText && (
+        <div className="canvas-text-edit-box"
+          style={{
+            left: `calc(50% + ${pos.x + (editedText.box.x + editedText.box.width / 2 - canvasWidth / 2) * scale}px)`,
+            top: `calc(50% + ${pos.y + (editedText.box.y + editedText.layout.inputCenterY - canvasHeight / 2) * scale}px)`,
+            width: Math.max(44, editedText.box.width * scale + 8),
+            height: Math.max(32, editedText.box.height * scale + 8),
+            fontSize: editedText.layout.size * scale
+          }}
+          onKeyDown={event => {
+            if (event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229) return;
+            if (event.key === 'Escape') {
+              event.preventDefault();
+              cancelToolSuggestion();
+            } else if (event.key === 'Enter') {
+              event.preventDefault();
+              guardInput(applySelectedWord);
+            }
+          }}
+        >
+          <input className="canvas-text-editor" type="text" aria-label="캔버스 글자 편집"
+            autoFocus autoComplete="off" spellCheck={false} disabled={locked || readOnly}
+            value={editedText.text}
+            onChange={event => guardInput(() => updateSelectedWord(event.target.value))}
+          />
+          <button type="button" className="canvas-text-move" aria-label="글자 이동" title="글자 이동"
+            disabled={locked || readOnly}
+            onPointerDown={event => {
+              const { x, y } = editedText.box;
+              startEditorDrag(event, false, (dx, dy) => moveSelectedWord(x + dx, y + dy));
+            }}
+            onKeyDown={event => {
+              const delta = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] }[event.key];
+              if (!delta) return;
+              event.preventDefault();
+              const step = event.shiftKey ? 10 : 1;
+              moveSelectedWord(editedText.box.x + delta[0] * step, editedText.box.y + delta[1] * step);
+            }}
+          ><span aria-hidden="true">✥</span></button>
+        </div>
       )}
       {editedShape && (
         <div className="shape-editor" style={{
@@ -1435,6 +1667,18 @@ function DrawCanvas({
           <button type="button" disabled={locked || readOnly} onClick={() => guardInput(applyShape)}>적용</button>
           <button type="button" onClick={discardShape}>취소</button>
         </div>
+      ) : suggestedTool?.ocrPhase ? (
+        <div className="canvas-action-prompt canvas-ocr-prompt">
+          {suggestedTool.ocrPhase === 'reading' && <p role="status">선택한 글자를 읽는 중…</p>}
+          {editedText && <button type="button" disabled={locked || readOnly || !editedText.text.trim()}
+            onClick={() => guardInput(applySelectedWord)}>글자 적용</button>}
+          {suggestedTool.ocrPhase === 'error' && <>
+            <p role="alert">글자를 읽지 못했습니다.</p>
+            <button type="button" disabled={locked || readOnly}
+              onClick={() => void readSelectedWord(suggestedTool)}>다시 시도</button>
+          </>}
+          <button type="button" onClick={cancelToolSuggestion}>취소</button>
+        </div>
       ) : suggestedTool && !suggestedTool.confirmed ? (
         <div className="canvas-action-prompt">
           <p role="status">{suggestedTool.error || (suggestedTool.loading ? '도형 외곽선을 분석하고 있습니다…'
@@ -1442,7 +1686,7 @@ function DrawCanvas({
           <button type="button" disabled={locked || readOnly || suggestedTool.loading} onClick={confirmSuggestedTool}>
             {suggestedTool.error ? '다시 시도' : '확인'}
           </button>
-          <button type="button" onClick={() => { selectionRequest.current++; setToolSuggestion(null); }}>취소</button>
+          <button type="button" onClick={cancelToolSuggestion}>취소</button>
         </div>
       ) : reviewPrompt?.review.layerId === activeId && activeLayer?.visible ? (
         <div className="canvas-action-prompt">

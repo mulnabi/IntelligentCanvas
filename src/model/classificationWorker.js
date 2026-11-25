@@ -1,8 +1,28 @@
 let queue = Promise.resolve()
 
-self.onmessage = ({ data: { id, kind, bitmap } }) => {
+async function fillRegion({ id, image, x, y }) {
+  try {
+    const { findFillRegion } = await import('./fillRegion')
+    const result = await findFillRegion(image, x, y)
+    self.postMessage({ id, result }, [result.mask.buffer])
+  } catch (error) {
+    self.postMessage({ id, error: error instanceof Error ? error.message : String(error) })
+  }
+}
+
+self.onmessage = ({ data: request }) => {
+  const { id, kind, bitmap } = request
+  if (kind === 'fill') {
+    void fillRegion(request)
+    return
+  }
   queue = queue.then(async () => {
     try {
+      if (kind === 'ocr') {
+        const { recognizeWord } = await import('./wordOcr')
+        self.postMessage({ id, result: await recognizeWord(bitmap) })
+        return
+      }
       if (kind === 'shape') {
         const { traceShape } = await import('./shapeContours')
         const canvas = new OffscreenCanvas(bitmap.width, bitmap.height)

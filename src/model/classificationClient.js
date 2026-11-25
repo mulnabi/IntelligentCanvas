@@ -23,18 +23,26 @@ function getWorker() {
   return worker
 }
 
-export function classifyImage(canvas, kind) {
-  const instance = getWorker()
-  const bitmap = canvas.transferToImageBitmap()
+function requestWorker(instance, kind, payload, transfers, handlePostError) {
   const id = ++nextId
   return new Promise((resolve, reject) => {
     requests.set(id, { resolve, reject })
     try {
-      instance.postMessage({ id, kind, bitmap }, [bitmap])
+      instance.postMessage({ id, kind, ...payload }, transfers)
     } catch (error) {
       requests.delete(id)
-      bitmap.close()
+      handlePostError?.()
       reject(error)
     }
   })
+}
+
+export function classifyImage(canvas, kind) {
+  const instance = getWorker()
+  const bitmap = canvas.transferToImageBitmap()
+  return requestWorker(instance, kind, { bitmap }, [bitmap], () => bitmap.close())
+}
+
+export function findCanvasFillRegion({ data, width, height }, x, y) {
+  return requestWorker(getWorker(), 'fill', { image: { data, width, height }, x, y }, [data.buffer])
 }
